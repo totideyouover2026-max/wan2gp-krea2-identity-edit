@@ -1,0 +1,12 @@
+{
+  "name": "Krea 2 Identity Edit",
+  "version": "0.1.0-dev",
+  "description": "Identity-preserving, instruction-based Krea 2 image editing for WanGP.",
+  "type": "model",
+  "model_handlers": [
+    ".models.krea2_identity_handler"
+  ],
+  "defaults": "./defaults",
+  "profiles": "./profiles"
+}
+

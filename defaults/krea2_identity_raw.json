@@ -1,0 +1,25 @@
+{
+  "model": {
+    "name": "Krea 2 Identity Edit v1.1 — Raw (experimental)",
+    "architecture": "krea2_identity_raw",
+    "description": "EXPERIMENTAL: CFG-guided identity-preserving instruction editing with Krea 2 Raw.",
+    "visible": true,
+    "URLs": [
+      "https://huggingface.co/DeepBeepMeep/krea-2/resolve/main/Krea2Raw_bf16.safetensors",
+      "https://huggingface.co/DeepBeepMeep/krea-2/resolve/main/Krea2Raw_quanto_bf16_int8.safetensors"
+    ],
+    "loras": [],
+    "loras_multipliers": []
+  },
+  "prompt": "Remove the object from the person's hand while preserving the person and the rest of the image.",
+  "negative_prompt": "",
+  "video_prompt_type": "I",
+  "resolution": "1024x1024",
+  "batch_size": 1,
+  "num_inference_steps": 20,
+  "guidance_scale": 2.0,
+  "custom_settings": {
+    "grounding_px": 768,
+    "identity_lora_variant": "r64"
+  }
+}
