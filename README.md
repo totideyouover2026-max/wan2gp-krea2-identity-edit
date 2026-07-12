@@ -1,5 +1,9 @@
 # WanGP Krea 2 Identity Edit
 
+> [!IMPORTANT]
+> This is a roughly put together temporary plug-in for Wan2GP users to be able to test out Krea2 Identity Edit. It has been quickly created with minimal testing, and serves only to be a temporary solution while DeepBeepMeep is away. Hopefully once DeepBeepMeep returns, they will be able to assess whether the Krea2 Identity Edit can be added smoother as a pipeline implementation.
+
+Description:
 Standalone WanGP model-plugin project for instruction-based, identity-preserving image editing with the community [Krea 2 Identity Edit](https://huggingface.co/conradlocke/krea2-identity-edit) LoRA.
 
 > [!IMPORTANT]
