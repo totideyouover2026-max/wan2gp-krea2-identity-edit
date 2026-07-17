@@ -105,14 +105,15 @@ def match_reference_dimensions(
 
 def identity_lora_url(variant: str) -> str:
     variants = {
-        "full": "krea2_identity_edit_v1_1.safetensors",
+        "full v1.2": "krea2_identity_edit_v1_2.safetensors",
+        "full v1.1": "krea2_identity_edit_v1_1.safetensors",
         "r128": "krea2_identity_edit_v1_1_r128.safetensors",
         "r64": "krea2_identity_edit_v1_1_r64.safetensors",
     }
     try:
         filename = variants[str(variant)]
     except KeyError as exc:
-        raise ValueError("identity_lora_variant must be one of: full, r128, r64") from exc
+        raise ValueError("identity_lora_variant must be one of: full v1.2, full v1.1, r128, r64") from exc
     return f"https://huggingface.co/conradlocke/krea2-identity-edit/resolve/main/{filename}"
 
 
