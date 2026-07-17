@@ -68,13 +68,14 @@ class family_handler(_Krea2Handler):
                     {
                         "id": "identity_lora_variant",
                         "name": "Identity Edit LoRA variant",
-                        "label": "Identity Edit v1.1 LoRA",
+                        "label": "Identity Edit LoRA",
                         "type": "dropdown",
                         "default": "r64",
                         "choices": [
                             ("Rank 64 — 0.46 GB", "r64"),
                             ("Rank 128 — 0.91 GB", "r128"),
-                            ("Full — 1.83 GB", "full"),
+                            ("Full v1.1 — 1.83 GB", "full_v1.1"),
+                            ("Full v1.2 — 1.83 GB", "full_v1.2"),
                         ],
                     },
                 ],
