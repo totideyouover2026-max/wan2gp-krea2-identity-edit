@@ -17,8 +17,8 @@ Standalone WanGP model-plugin project for instruction-based, identity-preserving
 - VAE source latents injected as clean in-context transformer tokens.
 - Image-grounded Qwen3-VL instruction conditioning.
 - Configurable `grounding_px`, defaulting to 768.
-- Automatic Identity Edit v1.1 LoRA download at strength 1.0.
-- Full, rank-128 and rank-64 LoRA variants.
+- Automatic Identity Edit LoRA download at strength 1.0.
+- v1.2 full-rank plus v1.1 full, rank-128 and rank-64 LoRA choices.
 - WanGP/MMGP model offloading and low-VRAM compatibility where practical.
 
 ## Repository status
@@ -31,7 +31,7 @@ Implemented:
 - clean VAE source tokens ordered as `[text | scene | subject | target]` with
   reference RoPE frames 1/2 and target frame 0;
 - grounded positive, CFG-negative and NAG conditioning;
-- dynamic Identity Edit v1.1 full/r128/r64 LoRA selection at strength 1.0;
+- dynamic Identity Edit v1.2 full and v1.1 full/r128/r64 LoRA selection at strength 1.0;
 - one/two-reference validation, first-reference aspect matching and a 2 MP cap;
 - WanGP callbacks, interruption, LoRA scheduling and standard image tensors.
 
@@ -50,6 +50,12 @@ Expect model downloads, VRAM usage and image quality to vary by WanGP version,
 GPU and memory profile. Do not upload model weights, user images or generated
 outputs to this repository. The first image is the scene reference; when using
 two images, the second is the subject reference.
+
+The upstream-recommended v1.2 full-rank weight is available from the **Identity
+Edit LoRA** dropdown. The default remains the smaller v1.1 rank-64 weight for
+low-VRAM testing. This plugin matches the output aspect ratio to the first
+reference; the upstream v1.2 node pack's optional FIT geometry and `ref_boost`
+dial are not yet implemented.
 
 Start with:
 

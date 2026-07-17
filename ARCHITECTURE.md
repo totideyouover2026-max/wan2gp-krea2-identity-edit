@@ -58,10 +58,15 @@ BF16/int8 choice. The missing vision tower is loaded from the public
 `Comfy-Org/Krea-2` checkpoint. Only its 315 BF16 `model.visual` tensors are
 materialized and passed to MMGP; its unrelated language tensors are ignored.
 
-Identity Edit LoRAs are selected dynamically through `get_loras_transformer`,
+Identity Edit v1.2 full and v1.1 full/r128/r64 LoRAs are selected dynamically through `get_loras_transformer`,
 which participates in WanGP's normal LoRA download, loading, scheduling and
 unloading flow. The ai-toolkit `diffusion_model.` prefix is removed by a small
 preprocessor before MMGP matches transformer modules.
+
+The plugin currently keeps its first-reference aspect-ratio matching behavior
+for every LoRA. The upstream v1.2 node pack's optional FIT geometry and
+`ref_boost` attention control are not yet exposed here; selecting v1.2 adds the
+new full-rank weights to the existing dual-conditioning path.
 
 If WanGP does not expose a stable reusable boundary, copy only the smallest necessary Apache-compatible/reference sections and record their origin in `THIRD_PARTY_NOTICES.md`.
 

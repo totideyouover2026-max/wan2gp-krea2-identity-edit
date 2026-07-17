@@ -50,8 +50,10 @@ class IdentityUtilsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             match_reference_dimensions(1024, 1024, (1000, 1))
 
-    def test_lora_variants_are_exact_v11_files(self):
+    def test_lora_variants_are_exact_published_files(self):
+        self.assertTrue(identity_lora_url("full_v1.2").endswith("v1_2.safetensors"))
         self.assertTrue(identity_lora_url("full").endswith("v1_1.safetensors"))
+        self.assertTrue(identity_lora_url("full_v1.1").endswith("v1_1.safetensors"))
         self.assertTrue(identity_lora_url("r128").endswith("v1_1_r128.safetensors"))
         self.assertTrue(identity_lora_url("r64").endswith("v1_1_r64.safetensors"))
         with self.assertRaises(ValueError):

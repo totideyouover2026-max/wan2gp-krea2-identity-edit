@@ -14,7 +14,11 @@ ASSETS = {
         "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/"
         "text_encoders/qwen3vl_4b_fp8_scaled.safetensors"
     ),
-    "full": (
+    "v1.2_full": (
+        "https://huggingface.co/conradlocke/krea2-identity-edit/resolve/main/"
+        "krea2_identity_edit_v1_2.safetensors"
+    ),
+    "v1.1_full": (
         "https://huggingface.co/conradlocke/krea2-identity-edit/resolve/main/"
         "krea2_identity_edit_v1_1.safetensors"
     ),
@@ -27,7 +31,7 @@ ASSETS = {
         "krea2_identity_edit_v1_1_r64.safetensors"
     ),
 }
-EXPECTED_RANKS = {"full": 256, "r128": 128, "r64": 64}
+EXPECTED_RANKS = {"v1.2_full": 256, "v1.1_full": 256, "r128": 128, "r64": 64}
 LORA_MODULE = re.compile(
     r"^diffusion_model\."
     r"(?:blocks\.\d+|txtfusion\.(?:layerwise_blocks|refiner_blocks)\.\d+)\."

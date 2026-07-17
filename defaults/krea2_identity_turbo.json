@@ -1,6 +1,6 @@
 {
   "model": {
-    "name": "Krea 2 Identity Edit v1.1 — Turbo (experimental)",
+    "name": "Krea 2 Identity Edit — Turbo (experimental)",
     "architecture": "krea2_identity_turbo",
     "description": "EXPERIMENTAL: identity-preserving instruction editing with Krea 2 Turbo.",
     "visible": true,

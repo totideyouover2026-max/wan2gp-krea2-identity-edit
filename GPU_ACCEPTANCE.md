@@ -24,7 +24,7 @@ For every inference run record:
 - WanGP memory profile and attention mode;
 - output resolution and reference count;
 - model variant (Raw/Turbo);
-- Identity Edit LoRA variant (full/r128/r64);
+- Identity Edit LoRA variant (v1.2 full or v1.1 full/r128/r64);
 - step count and effective CFG;
 - peak VRAM and wall time;
 - observed result and output path/hash.
@@ -39,7 +39,8 @@ their approved hashes/URLs.
 | --- | --- | --- |
 | Turbo, one reference, r64, 8 steps | Pending | Identity and unedited content preserved |
 | Turbo, one reference, r128, 10 steps | Pending | Correct grounded instruction edit |
-| Turbo, one reference, full, 12 steps | Pending | Full LoRA loads at strength 1.0 |
+| Turbo, one reference, v1.2 full, 12 steps | Pending | v1.2 full LoRA loads at strength 1.0 |
+| Turbo, one reference, v1.1 full, 12 steps | Pending | v1.1 full LoRA loads at strength 1.0 |
 | Raw, one reference, 20 steps, effective CFG 3 | Pending | Grounded empty negative pass; removal succeeds |
 | Turbo, scene then subject, two references | Pending | Scene remains frame 1; subject remains frame 2 |
 | Aspect-ratio mismatch request | Pending | Output follows primary source aspect ratio |

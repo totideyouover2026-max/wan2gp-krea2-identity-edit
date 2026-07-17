@@ -1,6 +1,6 @@
 {
   "model": {
-    "name": "Krea 2 Identity Edit v1.1 — Raw (experimental)",
+    "name": "Krea 2 Identity Edit — Raw (experimental)",
     "architecture": "krea2_identity_raw",
     "description": "EXPERIMENTAL: CFG-guided identity-preserving instruction editing with Krea 2 Raw.",
     "visible": true,

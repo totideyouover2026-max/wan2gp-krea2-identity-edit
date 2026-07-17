@@ -76,6 +76,20 @@ class HandlerContractTests(unittest.TestCase):
         self.assertEqual((raw["num_inference_steps"], raw["guidance_scale"]), (20, 2.0))
         self.assertEqual((turbo["num_inference_steps"], turbo["guidance_scale"]), (10, 0))
 
+    def test_lora_control_exposes_v12_and_versioned_v11_variants(self):
+        model_def = self.handler.query_model_def("krea2_identity_turbo", {})
+        lora_setting = next(
+            setting
+            for setting in model_def["custom_settings"]
+            if setting["id"] == "identity_lora_variant"
+        )
+        values = [value for _label, value in lora_setting["choices"]]
+        self.assertEqual(
+            values,
+            ["full_v1.2", "r64", "r128", "full_v1.1"],
+        )
+        self.assertEqual(lora_setting["default"], "r64")
+
     def test_loader_maps_wangp_arguments_into_factory_keywords(self):
         calls = []
 

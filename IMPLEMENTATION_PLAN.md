@@ -17,7 +17,7 @@
 - [x] Add required visual assets to `query_model_files`; reuse WanGP tokenizer assets and construct the image processor from the published config.
 - [x] Implement MMGP/offload-aware visual and language model loading.
 - [x] Make WanGP's language quantization path and the BF16 visual-prefix path explicit.
-- [x] Implement Identity Edit LoRA selection: v1.1 full, r128 and r64.
+- [x] Implement Identity Edit LoRA selection: v1.2 full and v1.1 full, r128 and r64.
 - [x] Add and unit-test LoRA key conversion for WanGP's Krea 2 transformer names; real loading remains an acceptance item.
 
 ## Phase 3 — dual conditioning
@@ -51,7 +51,7 @@
 - [ ] Add single-reference golden test fixtures.
 - [ ] Add two-reference scene/subject ordering fixture.
 - [ ] Test aspect-ratio mismatch warning.
-- [ ] Test all three LoRA variants.
+- [ ] Test all four LoRA variants.
 - [ ] Test model cancellation and model switching.
 - [ ] Measure peak RAM/VRAM and runtime at 1 MP, 1.5 MP and 2 MP.
 

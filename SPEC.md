@@ -27,7 +27,7 @@ Provide Krea 2 Identity Edit as a separately installable WanGP model plugin with
 7. Encode the instruction with the same source images through Qwen3-VL.
 8. Ground the negative/empty prompt with the same images whenever guidance requires an unconditional pass.
 9. Expose `grounding_px` with a 768 default and a sensible bounded range.
-10. Download and apply Identity Edit v1.1 at strength 1.0, with full/r128/r64 choices.
+10. Download and apply Identity Edit at strength 1.0, with v1.2 full and v1.1 full/r128/r64 choices.
 11. Preserve WanGP interruption, preview callback, LoRA scheduling and MMGP offload behavior.
 12. Return normal WanGP image output tensors and metadata.
 
@@ -68,7 +68,7 @@ Provide Krea 2 Identity Edit as a separately installable WanGP model plugin with
 - No modifications required in the host WanGP checkout.
 - Turbo and Raw single-reference golden tests pass.
 - Two-reference ordering test passes.
-- Full, r128 and r64 LoRAs load successfully.
+- The v1.2 full and v1.1 full/r128/r64 LoRAs load successfully.
 - Cancellation and model switching release memory correctly.
 - At least one documented low-VRAM profile is validated.
 - License and moderation obligations are documented.

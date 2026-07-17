@@ -7,6 +7,7 @@ not legal advice.
 
 - Base model: <https://huggingface.co/krea/Krea-2-Raw>
 - Adapter: <https://huggingface.co/conradlocke/krea2-identity-edit>
+- Supported adapter files: v1.2 full rank and v1.1 full/r128/r64.
 - Governing terms: Krea 2 Community License and associated acceptable-use terms.
 - Do not commit or redistribute the weights through this Git repository.
 - The plugin should download weights from their authoritative repositories and clearly surface applicable terms.
