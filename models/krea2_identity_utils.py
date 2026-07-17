@@ -105,8 +105,8 @@ def match_reference_dimensions(
 
 def identity_lora_url(variant: str) -> str:
     variants = {
-        "full v1.2": "krea2_identity_edit_v1_2.safetensors",
-        "full v1.1": "krea2_identity_edit_v1_1.safetensors",
+        "full_v1.2": "krea2_identity_edit_v1_2.safetensors",
+        "full_v1.1": "krea2_identity_edit_v1_1.safetensors",
         "r128": "krea2_identity_edit_v1_1_r128.safetensors",
         "r64": "krea2_identity_edit_v1_1_r64.safetensors",
     }
