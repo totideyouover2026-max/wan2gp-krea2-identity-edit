@@ -90,6 +90,22 @@ class HandlerContractTests(unittest.TestCase):
         )
         self.assertEqual(lora_setting["default"], "r64")
 
+    def test_legacy_fixed_lora_is_cleared_before_wangp_merges_model_def(self):
+        model_def = {
+            "loras": [
+                "https://huggingface.co/conradlocke/krea2-identity-edit/"
+                "resolve/main/krea2_identity_edit_v1_1.safetensors"
+            ],
+            "loras_multipliers": [1.0],
+        }
+        defaults = self.handler.query_model_def("krea2_identity_turbo", model_def)
+
+        # WanGP applies the supplied model definition after the handler defaults.
+        defaults.update(model_def)
+
+        self.assertEqual(defaults["loras"], [])
+        self.assertEqual(defaults["loras_multipliers"], [])
+
     def test_loader_maps_wangp_arguments_into_factory_keywords(self):
         calls = []
 

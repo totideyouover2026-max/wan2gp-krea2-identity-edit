@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import os
 
-from models.krea2.krea2_handler import family_handler as _Krea2Handler
+from models.krea2.krea2_handler import (  # pyright: ignore[reportMissingImports]
+    family_handler as _Krea2Handler,
+)
 
 
 RAW_MODEL_TYPE = "krea2_identity_raw"
@@ -36,6 +38,11 @@ class family_handler(_Krea2Handler):
 
     @staticmethod
     def query_model_def(base_model_type, model_def):
+        # WanGP appends model-definition LoRAs to those returned dynamically by
+        # get_loras_transformer. Clear legacy fixed entries in-place because
+        # WanGP merges this input over the handler defaults after this call.
+        model_def["loras"] = []
+        model_def["loras_multipliers"] = []
         result = dict(_Krea2Handler.query_model_def(_base_type(base_model_type), model_def))
         result.update(
             {
@@ -152,8 +159,12 @@ class family_handler(_Krea2Handler):
         **kwargs,
     ):
         try:
-            from models.krea2.krea2_main import Krea2Pipeline  # noqa: F401
-            from models.ideogram4.qwen3_vl_transformers import Qwen3VLVisionModel  # noqa: F401
+            from models.krea2.krea2_main import (  # pyright: ignore[reportMissingImports]
+                Krea2Pipeline,  # noqa: F401
+            )
+            from models.ideogram4.qwen3_vl_transformers import (  # pyright: ignore[reportMissingImports]
+                Qwen3VLVisionModel,  # noqa: F401
+            )
         except (ImportError, AttributeError) as exc:
             raise RuntimeError(
                 "This Krea 2 Identity Edit plugin requires " + MINIMUM_WANGP + ". "

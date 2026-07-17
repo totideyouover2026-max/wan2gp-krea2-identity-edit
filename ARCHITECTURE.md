@@ -62,6 +62,8 @@ Identity Edit v1.2 full and v1.1 full/r128/r64 LoRAs are selected dynamically th
 which participates in WanGP's normal LoRA download, loading, scheduling and
 unloading flow. The ai-toolkit `diffusion_model.` prefix is removed by a small
 preprocessor before MMGP matches transformer modules.
+The handler clears any legacy fixed Identity Edit LoRA in the installed model
+definition so WanGP does not append it to the variant selected in the dropdown.
 
 The plugin currently keeps its first-reference aspect-ratio matching behavior
 for every LoRA. The upstream v1.2 node pack's optional FIT geometry and
