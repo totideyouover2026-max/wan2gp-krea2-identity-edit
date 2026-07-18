@@ -438,7 +438,7 @@ class model_factory:
 
     def get_loras_transformer(self, get_model_recursive_prop, custom_settings=None, **kwargs):
         settings = custom_settings if isinstance(custom_settings, dict) else {}
-        return [identity_lora_url(settings.get("identity_lora_variant", "r64"))], [1.0]
+        return [identity_lora_url(settings.get("identity_lora_variant", "full_v1.2"))], [1.0]
 
     def generate(
         self,
@@ -463,7 +463,7 @@ class model_factory:
         references = validate_reference_images(original_input_ref_images)
         settings = custom_settings if isinstance(custom_settings, dict) else {}
         grounding_px = validate_grounding_px(settings.get("grounding_px"))
-        identity_lora_url(settings.get("identity_lora_variant", "r64"))
+        identity_lora_url(settings.get("identity_lora_variant", "full_v1.2"))
         width, height = match_reference_dimensions(width, height, references[0].size)
         if len(references) == 2 and width * height > TWO_REFERENCE_RECOMMENDED_PIXELS:
             warnings.warn(

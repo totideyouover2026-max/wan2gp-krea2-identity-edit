@@ -77,7 +77,7 @@ class family_handler(_Krea2Handler):
                         "name": "Identity Edit LoRA variant",
                         "label": "Identity Edit LoRA",
                         "type": "dropdown",
-                        "default": "r64",
+                        "default": "full_v1.2",
                         "choices": [
                             ("v1.2 Full — 1.83 GB (recommended)", "full_v1.2"),
                             ("v1.1 Rank 64 — 0.46 GB", "r64"),
@@ -204,7 +204,7 @@ class family_handler(_Krea2Handler):
                 "video_prompt_type": "I",
                 "custom_settings": {
                     "grounding_px": 768,
-                    "identity_lora_variant": "r64",
+                    "identity_lora_variant": "full_v1.2",
                 },
             }
         )
@@ -225,4 +225,4 @@ class family_handler(_Krea2Handler):
         custom_settings = ui_defaults.setdefault("custom_settings", {})
         if isinstance(custom_settings, dict):
             custom_settings.setdefault("grounding_px", 768)
-            custom_settings.setdefault("identity_lora_variant", "r64")
+            custom_settings.setdefault("identity_lora_variant", "full_v1.2")

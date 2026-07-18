@@ -20,6 +20,6 @@
   "guidance_scale": 2.0,
   "custom_settings": {
     "grounding_px": 768,
-    "identity_lora_variant": "r64"
+    "identity_lora_variant": "full_v1.2"
   }
 }

@@ -75,6 +75,8 @@ class HandlerContractTests(unittest.TestCase):
         self.handler.update_default_settings("krea2_identity_turbo", {}, turbo)
         self.assertEqual((raw["num_inference_steps"], raw["guidance_scale"]), (20, 2.0))
         self.assertEqual((turbo["num_inference_steps"], turbo["guidance_scale"]), (10, 0))
+        self.assertEqual(raw["custom_settings"]["identity_lora_variant"], "full_v1.2")
+        self.assertEqual(turbo["custom_settings"]["identity_lora_variant"], "full_v1.2")
 
     def test_lora_control_exposes_v12_and_versioned_v11_variants(self):
         model_def = self.handler.query_model_def("krea2_identity_turbo", {})
@@ -88,7 +90,7 @@ class HandlerContractTests(unittest.TestCase):
             values,
             ["full_v1.2", "r64", "r128", "full_v1.1"],
         )
-        self.assertEqual(lora_setting["default"], "r64")
+        self.assertEqual(lora_setting["default"], "full_v1.2")
 
     def test_legacy_fixed_lora_is_cleared_before_wangp_merges_model_def(self):
         model_def = {
