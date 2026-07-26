@@ -259,6 +259,12 @@ def _synchronized_identity_method(identity_method, video_prompt_type) -> str:
     current = str(identity_method or "")
     if mode == "identity_edit":
         return current if current.startswith("identity_edit") else "identity_edit"
+    if mode == "disabled_reid":
+        # Other WanGP models may use the generic ``I`` reference-mode letter.
+        # When this plugin's experimental ReID path is disabled, never copy an
+        # internal sentinel into the shared dropdown: Gradio validates hidden
+        # component values too, and the sentinel is intentionally not a choice.
+        return "identity_edit"
     return mode
 
 
@@ -282,8 +288,54 @@ def _refresh_image_label(value, base_label):
     return gr.update(label=image_input_label(base_label, value))
 
 
-def _refresh_gallery_label(value, base_label):
+def _refresh_shared_image_label(state, value, base_label):
+    if not _plugin_active(state):
+        return gr.update()
+    return _refresh_image_label(value, base_label)
+
+
+def _refresh_shared_gallery_label(state, value, base_label):
+    if not _plugin_active(state):
+        return gr.update()
     return gr.update(label=gallery_input_label(base_label, value))
+
+
+def _sync_custom_mask_upload(state, prompt_type, source):
+    if not _plugin_active(state) or not _custom_mask_mode(prompt_type):
+        return gr.update()
+    return source
+
+
+def _refresh_custom_guide_visibility(state):
+    if not _plugin_active(state):
+        return gr.update()
+    return gr.update(visible=False)
+
+
+def _refresh_context_controls(state, method, preparation, prompt_type):
+    if not _plugin_active(state):
+        return gr.update(), gr.update(), gr.update()
+    mode = _reference_mode(prompt_type)
+    reference_visible = mode in {"identity_edit", "reid"}
+    return (
+        gr.update(
+            visible=mode == "identity_edit",
+            choices=_ALL_IDENTITY_METHOD_CHOICES,
+            value=_synchronized_identity_method(method, prompt_type),
+        ),
+        gr.update(visible=reference_visible),
+        gr.update(visible=reference_visible and preparation == "sam3"),
+    )
+
+
+def _refresh_segmentation_phrase(state, preparation, prompt_type):
+    if not _plugin_active(state):
+        return gr.update()
+    visible = (
+        _reference_mode(prompt_type) in {"identity_edit", "reid"}
+        and preparation == "sam3"
+    )
+    return gr.update(visible=visible)
 
 
 class Krea2IdentityAdvancedUI(WAN2GPPlugin):
@@ -321,56 +373,68 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
         reference_preparation = dropdown_inputs[2]
         segmentation_phrase = text_inputs[3]
 
-        # Keep the serialized fifth slot out of the form even if a host refresh
-        # temporarily evaluates its visibility before the plugin event runs.
-        payload.visible = False
-
         initial_active = _plugin_active(self.state.value)
-        # WanGP's generic custom-guide slot is a filename-only gr.File.  The
-        # plugin mirrors it through an image uploader below while active so the
-        # uploaded mask itself remains visible.  The hidden host component
-        # continues to own queue persistence and the generation input.
-        self.custom_guide.visible = not initial_active
         initial_mode = _reference_mode(self.video_prompt_type.value)
-        identity_method.value = _synchronized_identity_method(
-            identity_method.value, self.video_prompt_type.value
-        )
-        identity_method.visible = initial_active and initial_mode == "identity_edit"
-        # Gradio stores dropdown choices internally as [label, value] pairs.
-        # Do not narrow this list when the selector is hidden; concurrent host
-        # refresh events can still carry the value from the previous mode.
-        identity_method.choices = [list(choice) for choice in _ALL_IDENTITY_METHOD_CHOICES]
         initial_reference_visible = initial_active and initial_mode in {
             "identity_edit",
             "reid",
         }
-        reference_preparation.visible = initial_reference_visible
-        segmentation_phrase.visible = (
-            initial_reference_visible and reference_preparation.value == "sam3"
-        )
-
-        control_base_label = getattr(self.image_guide, "label", None) or "Control Image"
-        references_base_label = (
-            getattr(self.image_refs, "label", None) or "Reference Images"
-        )
-        self.image_guide.label = image_input_label(
-            control_base_label, getattr(self.image_guide, "value", None)
-        )
-        self.image_refs.label = gallery_input_label(
-            references_base_label, getattr(self.image_refs, "value", None)
-        )
+        control_base_label = "Control Image"
+        references_base_label = "Reference Images"
+        if initial_active:
+            # These inputs are shared across every WanGP model. Mutate them
+            # only while one of this plugin's two architectures is selected.
+            payload.visible = False
+            # WanGP's generic custom-guide slot is a filename-only gr.File.
+            # The plugin mirrors it through an image uploader below while
+            # active; the hidden host component still owns queue persistence.
+            self.custom_guide.visible = False
+            identity_method.value = _synchronized_identity_method(
+                identity_method.value, self.video_prompt_type.value
+            )
+            identity_method.visible = initial_mode == "identity_edit"
+            # Gradio stores dropdown choices internally as [label, value] pairs.
+            identity_method.choices = [
+                list(choice) for choice in _ALL_IDENTITY_METHOD_CHOICES
+            ]
+            reference_preparation.visible = initial_reference_visible
+            segmentation_phrase.visible = (
+                initial_reference_visible and reference_preparation.value == "sam3"
+            )
+            self.image_guide.label = image_input_label(
+                control_base_label, getattr(self.image_guide, "value", None)
+            )
+            self.image_refs.label = gallery_input_label(
+                references_base_label, getattr(self.image_refs, "value", None)
+            )
         self.image_guide.change(
-            fn=_refresh_image_label,
-            inputs=[self.image_guide, gr.State(control_base_label)],
+            fn=_refresh_shared_image_label,
+            inputs=[self.state, self.image_guide, gr.State(control_base_label)],
             outputs=[self.image_guide],
             show_progress="hidden",
         )
         self.image_refs.change(
-            fn=_refresh_gallery_label,
-            inputs=[self.image_refs, gr.State(references_base_label)],
+            fn=_refresh_shared_gallery_label,
+            inputs=[self.state, self.image_refs, gr.State(references_base_label)],
             outputs=[self.image_refs],
             show_progress="hidden",
         )
+        for trigger in (
+            payload.change,
+            self.refresh_form_trigger.change,
+        ):
+            trigger(
+                fn=_refresh_shared_image_label,
+                inputs=[self.state, self.image_guide, gr.State(control_base_label)],
+                outputs=[self.image_guide],
+                show_progress="hidden",
+            )
+            trigger(
+                fn=_refresh_shared_gallery_label,
+                inputs=[self.state, self.image_refs, gr.State(references_base_label)],
+                outputs=[self.image_refs],
+                show_progress="hidden",
+            )
 
         def construct_depth_preview_ui():
             initially_visible = initial_active and _custom_mask_mode(
@@ -481,8 +545,8 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
                 preview_status,
             ]
             mask_upload.input(
-                fn=lambda source: source,
-                inputs=[mask_upload],
+                fn=_sync_custom_mask_upload,
+                inputs=[self.state, self.video_prompt_type, mask_upload],
                 outputs=[self.custom_guide],
                 show_progress="hidden",
             )
@@ -546,12 +610,17 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
 
         self.insert_after("custom_guide", construct_depth_preview_ui)
 
-        self.refresh_form_trigger.change(
-            fn=lambda state: gr.update(visible=not _plugin_active(state)),
-            inputs=[self.state],
-            outputs=[self.custom_guide],
-            show_progress="hidden",
-        )
+        for trigger in (
+            payload.change,
+            self.refresh_form_trigger.change,
+            self.custom_settings_visibility_trigger.change,
+        ):
+            trigger(
+                fn=_refresh_custom_guide_visibility,
+                inputs=[self.state],
+                outputs=[self.custom_guide],
+                show_progress="hidden",
+            )
 
         def construct_advanced_ui():
             initial_launcher_visible = _plugin_active(self.state.value)
@@ -919,8 +988,8 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
                 depth_user_lora_ramp_final,
             ]
 
-            def open_advanced(selection, packed_settings):
-                if selection != "yes":
+            def open_advanced(state, selection, packed_settings):
+                if not _plugin_active(state) or selection != "yes":
                     return [gr.update()] * (4 + len(modal_fields))
                 values = _safe_advanced_values(packed_settings)
                 return [
@@ -962,7 +1031,7 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
 
             show_advanced.change(
                 fn=open_advanced,
-                inputs=[show_advanced, payload],
+                inputs=[self.state, show_advanced, payload],
                 outputs=[modal]
                 + modal_fields
                 + [
@@ -995,6 +1064,7 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
             )
 
             def apply_advanced(
+                state,
                 process,
                 grounding,
                 resolution_limit,
@@ -1019,6 +1089,8 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
                 ramp_middle,
                 ramp_final,
             ):
+                if not _plugin_active(state):
+                    return gr.update(), gr.update(visible=False), "no"
                 packed = encode_advanced_settings(
                     {
                         "generation_process": process,
@@ -1050,7 +1122,7 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
 
             apply_button.click(
                 fn=apply_advanced,
-                inputs=modal_fields,
+                inputs=[self.state] + modal_fields,
                 outputs=[payload, modal, show_advanced],
                 show_progress="hidden",
             )
@@ -1097,20 +1169,6 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
 
         self.insert_after("custom_settings_visibility_trigger", construct_advanced_ui)
 
-        def refresh_context_controls(state, method, preparation, prompt_type):
-            active = _plugin_active(state)
-            mode = _reference_mode(prompt_type)
-            reference_visible = active and mode in {"identity_edit", "reid"}
-            return (
-                gr.update(
-                    visible=active and mode == "identity_edit",
-                    choices=_ALL_IDENTITY_METHOD_CHOICES,
-                    value=_synchronized_identity_method(method, prompt_type),
-                ),
-                gr.update(visible=reference_visible),
-                gr.update(visible=reference_visible and preparation == "sam3"),
-            )
-
         context_inputs = [
             self.state,
             identity_method,
@@ -1123,32 +1181,25 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
             segmentation_phrase,
         ]
         for trigger in (
+            payload.change,
             self.video_prompt_type.change,
             self.custom_settings_visibility_trigger.change,
         ):
             trigger(
-                fn=refresh_context_controls,
+                fn=_refresh_context_controls,
                 inputs=context_inputs,
                 outputs=context_outputs,
                 show_progress="hidden",
             )
         self.refresh_form_trigger.change(
-            fn=refresh_context_controls,
+            fn=_refresh_context_controls,
             inputs=context_inputs,
             outputs=context_outputs,
             show_progress="hidden",
         )
 
-        def refresh_segmentation_phrase(state, preparation, prompt_type):
-            visible = (
-                _plugin_active(state)
-                and _reference_mode(prompt_type) in {"identity_edit", "reid"}
-                and preparation == "sam3"
-            )
-            return gr.update(visible=visible)
-
         reference_preparation.change(
-            fn=refresh_segmentation_phrase,
+            fn=_refresh_segmentation_phrase,
             inputs=[self.state, reference_preparation, self.video_prompt_type],
             outputs=[segmentation_phrase],
             show_progress="hidden",

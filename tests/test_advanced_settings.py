@@ -353,6 +353,55 @@ class AdvancedSettingsTests(unittest.TestCase):
         ):
             spec.loader.exec_module(module)
 
+        identity_choice_values = {
+            value for _label, value in module._ALL_IDENTITY_METHOD_CHOICES
+        }
+        synchronized_values = {
+            module._synchronized_identity_method("identity_edit_ref4", prompt_type)
+            for prompt_type in ("KI", "I", "DV")
+        }
+        self.assertEqual(
+            module._synchronized_identity_method("identity_edit_ref4", "I"),
+            "identity_edit",
+        )
+        self.assertNotIn("disabled_reid", synchronized_values)
+        self.assertTrue(synchronized_values <= identity_choice_values)
+
+        inactive_state = {"active_form": "add", "model_type": "wan2.1_t2v"}
+        unchanged = {"__type__": "update"}
+        self.assertEqual(
+            module._refresh_shared_image_label(
+                inactive_state, None, "Other Control"
+            ),
+            unchanged,
+        )
+        self.assertEqual(
+            module._refresh_shared_gallery_label(
+                inactive_state, None, "Other References"
+            ),
+            unchanged,
+        )
+        self.assertEqual(
+            module._sync_custom_mask_upload(inactive_state, "Y", "mask.png"),
+            unchanged,
+        )
+        self.assertEqual(
+            module._refresh_custom_guide_visibility(inactive_state),
+            unchanged,
+        )
+        self.assertEqual(
+            module._refresh_context_controls(
+                inactive_state, "other_method", "other_preparation", "I"
+            ),
+            (unchanged, unchanged, unchanged),
+        )
+        self.assertEqual(
+            module._refresh_segmentation_phrase(
+                inactive_state, "sam3", "KI"
+            ),
+            unchanged,
+        )
+
         extension = module.Krea2IdentityAdvancedUI()
         extension.setup_ui()
         self.assertIn("krea2-advanced-drag-handle", extension._custom_js)
@@ -405,6 +454,67 @@ class AdvancedSettingsTests(unittest.TestCase):
             for constructor in constructors.values():
                 panel = constructor()
                 self.assertIsInstance(panel, gr.Column)
+
+        inactive_extension = module.Krea2IdentityAdvancedUI()
+        inactive_extension.setup_ui()
+        with gr.Blocks():
+            inactive_extension.state = gr.State(inactive_state)
+            inactive_extension.refresh_form_trigger = gr.Textbox(visible=False)
+            inactive_extension.video_prompt_type = gr.Textbox(value="I", visible=False)
+            inactive_extension.image_guide = gr.Image(
+                type="pil", label="Other Control"
+            )
+            inactive_extension.image_refs = gr.Gallery(label="Other References")
+            inactive_extension.custom_guide = gr.File(
+                type="filepath", label="Other Custom Guide", visible=False
+            )
+            inactive_extension.get_preprocessor = lambda process_type, color: (
+                lambda image: image
+            )
+            inactive_extension.custom_settings_visibility_trigger = gr.Textbox(
+                visible=False
+            )
+            inactive_payload = gr.Textbox(value="other payload", visible=True)
+            inactive_segmentation = gr.Textbox(
+                value="other phrase", visible=True
+            )
+            inactive_extension.custom_setting_text_inputs = [
+                gr.Textbox(value="") for _index in range(3)
+            ] + [inactive_segmentation, inactive_payload]
+            inactive_identity = gr.Dropdown(
+                choices=[("Other Method", "other_method")],
+                value="other_method",
+                visible=True,
+            )
+            inactive_preparation = gr.Dropdown(
+                choices=[("Other Preparation", "other_preparation")],
+                value="other_preparation",
+                visible=True,
+            )
+            inactive_extension.custom_setting_dropdown_inputs = [
+                inactive_identity,
+                gr.Dropdown(),
+                inactive_preparation,
+                gr.Dropdown(),
+                gr.Dropdown(),
+            ]
+            inactive_extension.post_ui_setup({})
+
+            self.assertTrue(inactive_payload.visible)
+            self.assertFalse(inactive_extension.custom_guide.visible)
+            self.assertTrue(inactive_identity.visible)
+            self.assertEqual(inactive_identity.value, "other_method")
+            self.assertEqual(
+                inactive_identity.choices, [("Other Method", "other_method")]
+            )
+            self.assertTrue(inactive_preparation.visible)
+            self.assertTrue(inactive_segmentation.visible)
+            self.assertEqual(
+                inactive_extension.image_guide.label, "Other Control"
+            )
+            self.assertEqual(
+                inactive_extension.image_refs.label, "Other References"
+            )
 
 
 if __name__ == "__main__":

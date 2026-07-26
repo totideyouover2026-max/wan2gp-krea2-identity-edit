@@ -8,6 +8,11 @@ a defaults root and a profiles root. A small `plugin.py` extension uses WanGP's
 public component-request/insertion API solely to make the model's own settings
 adaptive and to render its Advanced Settings modal. It does not patch WanGP
 core or add a separate top-level application tab.
+Because WanGP reuses those requested components across model families, the
+extension treats them as read-only unless `krea2_identity_raw` or
+`krea2_identity_turbo` is selected: inactive callbacks return empty Gradio
+updates and startup leaves other models' values, choices, visibility and labels
+untouched.
 
 The plugin uses unique architecture identifiers because WanGP rejects multiple handlers that claim the same model type.
 
