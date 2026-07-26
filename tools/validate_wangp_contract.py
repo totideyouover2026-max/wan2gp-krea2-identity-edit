@@ -26,6 +26,11 @@ REQUIRED = {
         "Qwen3VLConfig",
         "register_qwen3_vl_config",
     },
+    "shared/gradio/field_help.py": {
+        "get_model_prompt_help",
+        "render_model_prompt_tools",
+    },
+    "shared/extra_settings.py": {"get_def"},
 }
 
 
@@ -55,9 +60,16 @@ def validate(root: Path) -> list[str]:
         source = wgp.read_text(encoding="utf-8")
         for required_text in (
             "original_input_ref_images",
+            "video_prompt_type= video_prompt_type",
+            "video_guide= video_guide",
+            "input_frames = src_video",
+            "input_masks = src_mask",
+            "input_ref_images=",
             "custom_settings=custom_settings_for_model",
             "get_loras_transformer",
             "load_loras_into_model",
+            "get_custom_setting_slider_bounds",
+            "custom_setting_visible",
         ):
             if required_text not in source:
                 errors.append(f"wgp.py lacks runtime contract: {required_text}")

@@ -13,5 +13,36 @@ not bundled with this repository and is governed by its own license:
 
   https://github.com/deepbeepmeep/Wan2GP
 
+The experimental depth-control path independently implements the inference
+contract documented by the following projects; no source code from them is
+bundled:
+
+  Krea-2-controlnet
+  https://github.com/Tanmaypatil123/Krea-2-controlnet
+
+  comfyui-krea2-controlnet
+  https://github.com/facok/comfyui-krea2-controlnet
+
 Model and adapter weights are downloaded separately and are not licensed under
 the Apache License for this plugin. See THIRD_PARTY_NOTICES.md.
+
+Registered spatial outpainting adapts Apache-2.0 helper and pipeline concepts
+from Krea 2 Registered Outpaint:
+
+  Krea 2 Registered Outpaint
+  Pipeline copyright 2026 Ostris, LLC
+  https://huggingface.co/yijunwang2/krea2-outpaint
+
+The rank-32 adapter is governed by the Krea 2 Community License Agreement. This
+integration is unofficial and is not endorsed by Krea or Ostris.
+
+Krea 2 ReID isolated reference conditioning independently adapts the published
+Apache-2.0 pipeline contract from:
+
+  Krea 2 ReID / Krea2OstrisEdit pipeline
+  Pipeline copyright 2026 Ostris, LLC
+  https://huggingface.co/yijunwang2/krea2-reid
+
+The ReID rank-32 adapter is governed by the Krea 2 Community License Agreement.
+No model weights or optional YuNet face detector are bundled. This integration
+is unofficial and is not endorsed by Krea or Ostris.

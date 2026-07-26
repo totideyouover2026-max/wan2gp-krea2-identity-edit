@@ -15,6 +15,9 @@ class ScaffoldTests(unittest.TestCase):
         self.assertTrue((ROOT / manifest["defaults"]).is_dir())
         self.assertTrue((ROOT / manifest["profiles"]).is_dir())
         self.assertEqual(manifest["model_handlers"], [".models.krea2_identity_handler"])
+        self.assertTrue((ROOT / "plugin.py").is_file())
+        self.assertTrue((ROOT / "models" / "krea2_advanced_settings.py").is_file())
+        self.assertTrue((ROOT / "models" / "krea2_depth_preview.py").is_file())
 
     def test_model_architectures_are_unique_and_visible_for_preview(self):
         architectures = set()
@@ -41,6 +44,17 @@ class ScaffoldTests(unittest.TestCase):
             model = json.loads(path.read_text(encoding="utf-8"))["model"]
             self.assertEqual(model.get("loras"), [])
             self.assertEqual(model.get("loras_multipliers"), [])
+
+    def test_models_share_a_generic_editable_prompt_template(self):
+        prompts = []
+        for path in sorted((ROOT / "defaults").glob("*.json")):
+            definition = json.loads(path.read_text(encoding="utf-8"))
+            prompts.append(definition["prompt"])
+        self.assertEqual(len(set(prompts)), 1)
+        self.assertIn("[desired appearance or action]", prompts[0])
+        self.assertIn("[desired environment]", prompts[0])
+        self.assertNotIn("balcony", prompts[0].lower())
+        self.assertNotIn("railing", prompts[0].lower())
 
     def test_release_profiles_remain_gated(self):
         profiles = list((ROOT / "profiles" / "krea2_identity").glob("*.json"))

@@ -10,33 +10,47 @@ import urllib.request
 
 
 ASSETS = {
-    "vision": (
-        "https://huggingface.co/Comfy-Org/Krea-2/resolve/main/"
-        "text_encoders/qwen3vl_4b_fp8_scaled.safetensors"
+    "qwen3_vl_bf16": (
+        "https://huggingface.co/DeepBeepMeep/krea-2/resolve/main/"
+        "Qwen3-VL-4B-Instruct/Qwen3-VL-4B-Instruct_bf16.safetensors"
     ),
     "v1.2_full": (
         "https://huggingface.co/conradlocke/krea2-identity-edit/resolve/main/"
         "krea2_identity_edit_v1_2.safetensors"
     ),
-    "v1.1_full": (
+    "v1.2_r128": (
         "https://huggingface.co/conradlocke/krea2-identity-edit/resolve/main/"
-        "krea2_identity_edit_v1_1.safetensors"
+        "krea2_identity_edit_v1_2_r128.safetensors"
     ),
-    "r128": (
+    "v1.2_r64": (
         "https://huggingface.co/conradlocke/krea2-identity-edit/resolve/main/"
-        "krea2_identity_edit_v1_1_r128.safetensors"
+        "krea2_identity_edit_v1_2_r64.safetensors"
     ),
-    "r64": (
-        "https://huggingface.co/conradlocke/krea2-identity-edit/resolve/main/"
-        "krea2_identity_edit_v1_1_r64.safetensors"
+    "depth_control": (
+        "https://huggingface.co/Patil/Krea-2-depth-controlnet/resolve/main/"
+        "depth-control-lora.safetensors"
+    ),
+    "reid": (
+        "https://huggingface.co/yijunwang2/krea2-reid/resolve/main/"
+        "krea2_reid_rank32.safetensors"
     ),
 }
-EXPECTED_RANKS = {"v1.2_full": 256, "v1.1_full": 256, "r128": 128, "r64": 64}
+EXPECTED_RANKS = {
+    "v1.2_full": 256,
+    "v1.2_r128": 128,
+    "v1.2_r64": 64,
+    "reid": 32,
+}
 LORA_MODULE = re.compile(
     r"^diffusion_model\."
     r"(?:blocks\.\d+|txtfusion\.(?:layerwise_blocks|refiner_blocks)\.\d+)\."
     r"(?:attn\.(?:gate|wk|wo|wq|wv)|mlp\.(?:down|gate|up))\."
     r"lora_[AB]\.weight$"
+)
+DEPTH_LORA_MODULE = re.compile(
+    r"^blocks\.\d+\."
+    r"(?:attn\.(?:gate|wk|wo|wq|wv)|mlp\.(?:down|gate|up))\."
+    r"[AB]$"
 )
 
 
@@ -61,13 +75,45 @@ def main() -> int:
     for name, url in ASSETS.items():
         header = safetensors_header(url)
         keys = [key for key in header if key != "__metadata__"]
-        if name == "vision":
-            visual = [key for key in keys if key.startswith("model.visual.")]
-            if not visual:
-                raise SystemExit("ERROR: visual checkpoint has no model.visual weights")
-            if any(header[key].get("dtype") != "BF16" for key in visual):
-                raise SystemExit("ERROR: expected the Qwen3-VL visual prefix to be BF16")
-            print(f"OK: vision exposes {len(visual)} BF16 model.visual tensors")
+        if name == "qwen3_vl_bf16":
+            visual = [key for key in keys if key.startswith("visual.")]
+            language = [key for key in keys if key.startswith("language_model.")]
+            if not visual or not language:
+                raise SystemExit(
+                    "ERROR: full Qwen3-VL checkpoint lacks visual or language weights"
+                )
+            selected = visual + language
+            if any(header[key].get("dtype") != "BF16" for key in selected):
+                raise SystemExit("ERROR: expected full Qwen3-VL weights to be BF16")
+            print(
+                "OK: full Qwen3-VL checkpoint exposes "
+                f"{len(visual)} visual and {len(language)} language BF16 tensors"
+            )
+        elif name == "depth_control":
+            adapter_keys = [key for key in keys if key not in {"first.weight", "first.bias"}]
+            if len(adapter_keys) != 448:
+                raise SystemExit(
+                    f"ERROR: depth control exposes {len(adapter_keys)} block tensors"
+                )
+            if any(DEPTH_LORA_MODULE.fullmatch(key) is None for key in adapter_keys):
+                raise SystemExit("ERROR: depth control targets unknown Krea 2 modules")
+            ranks = {
+                header[key]["shape"][0]
+                for key in adapter_keys
+                if key.endswith(".A")
+            }
+            if ranks != {64}:
+                raise SystemExit(
+                    f"ERROR: depth control has unexpected adapter ranks: {ranks}"
+                )
+            if header.get("first.weight", {}).get("shape") != [6144, 128]:
+                raise SystemExit("ERROR: depth control lacks the 6144x128 input projection")
+            if header.get("first.bias", {}).get("shape") != [6144]:
+                raise SystemExit("ERROR: depth control lacks the 6144 input bias")
+            print(
+                "OK: depth control exposes 448 rank-64 block tensors and a "
+                "6144x128 input projection"
+            )
         else:
             if not keys or any(not key.startswith("diffusion_model.") for key in keys):
                 raise SystemExit(f"ERROR: {name} LoRA has unexpected key prefixes")

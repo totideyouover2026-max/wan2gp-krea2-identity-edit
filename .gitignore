@@ -16,3 +16,59 @@ tmp/
 .DS_Store
 Thumbs.db
 
+# Local editor and workspace settings
+.vscode/
+.idea/
+.vs/
+*.code-workspace
+
+# Coverage, test, packaging, and analysis artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.pytype/
+.pyre/
+.ipynb_checkpoints/
+build/
+dist/
+.eggs/
+*.egg-info/
+
+# Local environment configuration
+.env
+.env.*
+!.env.example
+
+# Downloaded runtime assets and local experiments
+/ckpts/
+/loras/
+/cache/
+/artifacts/
+/benchmarks/
+wandb/
+mlruns/
+lightning_logs/
+
+# Additional model and serialized-data formats
+*.onnx
+*.bin
+*.gguf
+*.h5
+*.hdf5
+*.pb
+*.tflite
+*.npy
+*.npz
+*.pkl
+*.pickle
+
+# Local development records and generated examples
+Codex.md
+Checklist.txt
+Head Replacement - Identity Edit Turbo.json
+test_err.log
+/Examples/
