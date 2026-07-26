@@ -37,6 +37,7 @@ def main() -> int:
         "plugin.py",
         "plugin_info.json",
         "requirements.txt",
+        "requirements-test.txt",
         "models/__init__.py",
         "models/krea2_identity_handler.py",
         "models/krea2_advanced_settings.py",
