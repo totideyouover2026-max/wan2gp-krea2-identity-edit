@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import importlib.util
+import os
 import sys
 import types
 import unittest
@@ -287,6 +288,8 @@ class AdvancedSettingsTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location(module_name, ROOT / "plugin.py")
         module = importlib.util.module_from_spec(spec)
         with patch.dict(
+            os.environ, {"KREA2_IDENTITY_ENABLE_REID_EXPERIMENTS": ""}
+        ), patch.dict(
             sys.modules,
             {
                 package_name: package,
@@ -338,6 +341,8 @@ class AdvancedSettingsTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location(module_name, ROOT / "plugin.py")
         module = importlib.util.module_from_spec(spec)
         with patch.dict(
+            os.environ, {"KREA2_IDENTITY_ENABLE_REID_EXPERIMENTS": ""}
+        ), patch.dict(
             sys.modules,
             {
                 package_name: package,
@@ -387,7 +392,7 @@ class AdvancedSettingsTests(unittest.TestCase):
             }
             self.assertIn("identity_edit_ref2", identity_choice_values)
             self.assertIn("identity_edit_ref8_scene2", identity_choice_values)
-            self.assertIn("reid", identity_choice_values)
+            self.assertNotIn("reid", identity_choice_values)
             self.assertIn("depth_prompt", identity_choice_values)
             self.assertEqual(len(extension._insert_after_requests), 2)
             constructors = dict(extension._insert_after_requests)
