@@ -7,7 +7,6 @@ The WanGP integration supplies the canvas rectangle; no model weights are bundle
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 
 import numpy as np
 from PIL import Image

@@ -77,7 +77,6 @@ def build_masked_control_preview(
 ):
     """Show which control pixels will be allowed to contribute depth."""
     control = _load_image(control_source, "Control Image")
-    original_max_side = max(control.size)
     _hard, feathered, channel = prepare_preview_mask(
         mask_source,
         control.size,
