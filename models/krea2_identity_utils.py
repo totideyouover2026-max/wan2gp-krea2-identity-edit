@@ -15,9 +15,6 @@ TWO_REFERENCE_RECOMMENDED_PIXELS = 1_500_000
 MIN_DEPTH_CONTROL_STRENGTH = 0.0
 MAX_DEPTH_CONTROL_STRENGTH = 2.0
 DEFAULT_DEPTH_CONTROL_STRENGTH = 1.0
-MIN_REID_LORA_STRENGTH = 0.0
-MAX_REID_LORA_STRENGTH = 2.0
-DEFAULT_REID_LORA_STRENGTH = 1.0
 MIN_DIRECT_IMAGE_DENOISING_STRENGTH = 0.0
 MAX_DIRECT_IMAGE_DENOISING_STRENGTH = 1.0
 DEFAULT_DIRECT_IMAGE_DENOISING_STRENGTH = 0.25
@@ -26,7 +23,6 @@ MAX_DEPTH_MASK_FEATHER_PX = 64
 DEFAULT_DEPTH_MASK_FEATHER_PX = 16
 DEPTH_CONTROL_LORA_FILENAME = "depth-control-lora.safetensors"
 OUTPAINT_LORA_FILENAME = "krea2_outpaint_rank32.safetensors"
-REID_LORA_FILENAME = "krea2_reid_rank32.safetensors"
 OUTPAINT_MODES = {"off", "outpaint_only", "identity_then_outpaint"}
 DEPTH_USER_LORA_TIMINGS = {"depth_first", "all_steps"}
 DEFAULT_DEPTH_USER_LORA_RAMP = (0.0, 0.25, 1.0)
@@ -45,21 +41,12 @@ IDENTITY_METHOD_PROFILES = {
     "identity_edit_ref8": ("identity_edit", 8.0, 1.0),
     "identity_edit_ref4_scene2": ("identity_edit", 4.0, 2.0),
     "identity_edit_ref8_scene2": ("identity_edit", 8.0, 2.0),
-    "reid": ("reid", 1.0, 1.0),
     "depth_prompt": ("depth_prompt", 1.0, 1.0),
 }
 IDENTITY_METHODS = set(IDENTITY_METHOD_PROFILES)
-TWO_PHASE_MODES = {"off", "depth_then_reid"}
-PHASE2_DEPTH_MODES = {"keep", "off"}
-MIN_PHASE2_DENOISING_STRENGTH = 0.05
-MAX_PHASE2_DENOISING_STRENGTH = 0.5
 DEFAULT_PHASE2_DENOISING_STRENGTH = 0.25
 GENERATION_PROCESS_PROFILES = {
     "standard": ("off", DEFAULT_PHASE2_DENOISING_STRENGTH, "keep", "off"),
-    "two_phase_015_keep": ("depth_then_reid", 0.15, "keep", "off"),
-    "two_phase_025_keep": ("depth_then_reid", 0.25, "keep", "off"),
-    "two_phase_035_keep": ("depth_then_reid", 0.35, "keep", "off"),
-    "two_phase_025_off": ("depth_then_reid", 0.25, "off", "off"),
     "outpaint_only": ("off", DEFAULT_PHASE2_DENOISING_STRENGTH, "keep", "outpaint_only"),
     "identity_then_outpaint": (
         "off",
@@ -68,15 +55,6 @@ GENERATION_PROCESS_PROFILES = {
         "identity_then_outpaint",
     ),
 }
-# Match the published ReID inference example: both the Qwen3-VL view and the
-# clean VAE reference stream use a 384^2 pixel budget.  A 1024^2 diagnostic
-# increased the clean stream from 576 to 3,564 tokens without improving
-# identity fidelity, so it must not silently become the plugin default.
-REID_QWEN_MAX_PIXELS = 384 * 384
-REID_VAE_MAX_PIXELS = 384 * 384
-REID_INFERENCE_STEPS = 8
-
-
 def resolve_wangp_checkpoint(path, locate_file) -> str:
     """Resolve absolute, checkpoint-relative, and ckpts-prefixed host paths."""
     if path is None:
@@ -247,34 +225,6 @@ def validate_identity_lora_variant(value) -> str:
     return variant
 
 
-def reid_lora_url() -> str:
-    """Return the authoritative Krea 2 ReID rank-32 adapter URL."""
-    return (
-        "https://huggingface.co/yijunwang2/krea2-reid/resolve/main/"
-        f"{REID_LORA_FILENAME}"
-    )
-
-
-def validate_reid_lora_strength(value) -> float:
-    """Validate the diagnostic ReID adapter multiplier."""
-    if value is None:
-        return DEFAULT_REID_LORA_STRENGTH
-    if isinstance(value, bool):
-        raise ValueError("reid_lora_strength must be a number")
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("reid_lora_strength must be a number") from exc
-    if not math.isfinite(parsed):
-        raise ValueError("reid_lora_strength must be finite")
-    if not MIN_REID_LORA_STRENGTH <= parsed <= MAX_REID_LORA_STRENGTH:
-        raise ValueError(
-            "reid_lora_strength must be between "
-            f"{MIN_REID_LORA_STRENGTH} and {MAX_REID_LORA_STRENGTH}"
-        )
-    return parsed
-
-
 def validate_identity_method(value) -> str:
     """Select one mutually exclusive Krea 2 conditioning implementation."""
     method = str(value or "identity_edit")
@@ -284,7 +234,7 @@ def validate_identity_method(value) -> str:
         ]
     except KeyError as exc:
         raise ValueError(
-            "identity_method must be an Identity Edit fidelity profile, reid, "
+            "identity_method must be an Identity Edit fidelity profile "
             "or depth_prompt"
         ) from exc
     return implementation
@@ -299,47 +249,10 @@ def resolve_identity_reference_boosts(value) -> tuple[float, float]:
         ]
     except KeyError as exc:
         raise ValueError(
-            "identity_method must be an Identity Edit fidelity profile, reid, "
+            "identity_method must be an Identity Edit fidelity profile "
             "or depth_prompt"
         ) from exc
     return subject_boost, scene_boost
-
-
-def validate_two_phase_mode(value) -> str:
-    """Select the opt-in depth-first, low-denoise ReID refinement workflow."""
-    mode = str(value or "off")
-    if mode not in TWO_PHASE_MODES:
-        raise ValueError("two_phase_mode must be off or depth_then_reid")
-    return mode
-
-
-def validate_phase2_depth_mode(value) -> str:
-    """Choose whether phase two keeps target-only depth conditioning active."""
-    mode = str(value or "keep")
-    if mode not in PHASE2_DEPTH_MODES:
-        raise ValueError("phase2_depth_mode must be keep or off")
-    return mode
-
-
-def validate_phase2_denoising_strength(value) -> float:
-    """Bound the experimental refinement pass to a genuinely low-noise range."""
-    if value is None:
-        return DEFAULT_PHASE2_DENOISING_STRENGTH
-    if isinstance(value, bool):
-        raise ValueError("phase2_denoising_strength must be a number")
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("phase2_denoising_strength must be a number") from exc
-    if not math.isfinite(parsed):
-        raise ValueError("phase2_denoising_strength must be finite")
-    if not MIN_PHASE2_DENOISING_STRENGTH <= parsed <= MAX_PHASE2_DENOISING_STRENGTH:
-        raise ValueError(
-            "phase2_denoising_strength must be between "
-            f"{MIN_PHASE2_DENOISING_STRENGTH} and "
-            f"{MAX_PHASE2_DENOISING_STRENGTH}"
-        )
-    return parsed
 
 
 def validate_generation_process(value) -> str:
@@ -347,81 +260,28 @@ def validate_generation_process(value) -> str:
     process = str(value or "standard")
     if process not in GENERATION_PROCESS_PROFILES:
         raise ValueError(
-            "generation_process must be a standard, two-phase, or outpaint profile"
+            "generation_process must be standard or a registered outpaint profile"
         )
     return process
 
 
 def resolve_generation_process(settings):
-    """Resolve the visible profile, retaining compatibility with earlier settings."""
+    """Resolve the visible profile."""
     values = settings if isinstance(settings, dict) else {}
-    if "generation_process" in values:
-        process = validate_generation_process(values.get("generation_process"))
-        return GENERATION_PROCESS_PROFILES[process]
-    return (
-        validate_two_phase_mode(values.get("two_phase_mode")),
-        validate_phase2_denoising_strength(values.get("phase2_denoising_strength")),
-        validate_phase2_depth_mode(values.get("phase2_depth_mode")),
-        validate_outpaint_mode(values.get("outpaint_mode")),
-    )
+    process = migrate_generation_process(values)
+    return GENERATION_PROCESS_PROFILES[process]
 
 
 def migrate_generation_process(settings) -> str:
-    """Map the former independent controls to the nearest visible profile."""
+    """Map current and older settings to a supported visible profile."""
     values = settings if isinstance(settings, dict) else {}
     if "generation_process" in values:
-        return validate_generation_process(values.get("generation_process"))
+        process = str(values.get("generation_process") or "standard")
+        return process if process in GENERATION_PROCESS_PROFILES else "standard"
     outpaint = validate_outpaint_mode(values.get("outpaint_mode"))
     if outpaint != "off":
         return outpaint
-    two_phase = validate_two_phase_mode(values.get("two_phase_mode"))
-    if two_phase == "off":
-        return "standard"
-    depth_mode = validate_phase2_depth_mode(values.get("phase2_depth_mode"))
-    denoising = validate_phase2_denoising_strength(
-        values.get("phase2_denoising_strength")
-    )
-    if depth_mode == "off":
-        return "two_phase_025_off"
-    if denoising <= 0.20:
-        return "two_phase_015_keep"
-    if denoising <= 0.30:
-        return "two_phase_025_keep"
-    return "two_phase_035_keep"
-
-
-def validate_reid_reference_images(images) -> list:
-    """Validate ReID's stricter single-reference contract."""
-    references = validate_reference_images(images)
-    if len(references) != 1:
-        raise ValueError("Krea 2 ReID requires exactly one identity reference image")
-    return references
-
-
-def fit_reference_pixel_budget(
-    reference_size: tuple[int, int],
-    *,
-    max_pixels: int = REID_VAE_MAX_PIXELS,
-    align: int = 16,
-) -> tuple[int, int]:
-    """Downscale a reference to an area budget without changing its aspect ratio."""
-    width, height = map(int, reference_size)
-    if width <= 0 or height <= 0:
-        raise ValueError("The ReID reference image has invalid dimensions")
-    if max_pixels < align * align:
-        raise ValueError("The ReID reference pixel budget is too small")
-
-    scale = min(1.0, math.sqrt(max_pixels / (width * height)))
-    width = max(align, int(round(width * scale / align)) * align)
-    height = max(align, int(round(height * scale / align)) * align)
-    while width * height > max_pixels:
-        if width >= height and width > align:
-            width -= align
-        elif height > align:
-            height -= align
-        else:
-            break
-    return width, height
+    return "standard"
 
 
 def fit_identity_reference_geometry(

@@ -7,7 +7,6 @@ Qwen3-VL vision path and the clean reference-token stream.
 
 from __future__ import annotations
 
-import hashlib
 import math
 import os
 import types
@@ -20,14 +19,10 @@ import torch.nn.functional as F
 from einops import rearrange
 from accelerate import init_empty_weights
 from PIL import Image
-from safetensors import safe_open
 from transformers import (
     AutoTokenizer,
-    Qwen2VLImageProcessor,
     Qwen2VLImageProcessorFast,
-    Qwen2VLProcessor,
 )
-from transformers.video_processing_utils import BaseVideoProcessor
 
 from mmgp import offload
 from shared.utils import files_locator as fl
@@ -55,18 +50,11 @@ from models.krea2.krea2_mmdit import attention, key_padding_mask, ropeapply
 
 from .krea2_advanced_settings import expand_advanced_settings
 from .krea2_custom_depth_mask import load_custom_depth_mask
-from .krea2_identity_features import (
-    REID_EXPERIMENTS_DISABLED_MESSAGE,
-    reid_experiments_enabled,
-)
 from .krea2_registered_outpaint import canvas_bbox, composite, prepare_source
 
 from .krea2_identity_utils import (
     DEFAULT_GROUNDING_PX,
     DEPTH_CONTROL_LORA_FILENAME,
-    REID_INFERENCE_STEPS,
-    REID_QWEN_MAX_PIXELS,
-    REID_VAE_MAX_PIXELS,
     TWO_REFERENCE_RECOMMENDED_PIXELS,
     delay_user_loras_for_depth,
     schedule_builtin_identity_depth_adapters,
@@ -75,12 +63,10 @@ from .krea2_identity_utils import (
     depth_control_lora_url,
     direct_image_control_selected,
     fit_identity_reference_geometry,
-    fit_reference_pixel_budget,
     identity_lora_url,
     match_reference_dimensions,
     outpaint_lora_url,
     preprocess_krea2_adapter_state_dict,
-    reid_lora_url,
     resolve_generation_process,
     resolve_identity_reference_boosts,
     resolve_wangp_checkpoint,
@@ -98,19 +84,28 @@ from .krea2_identity_utils import (
     validate_identity_method,
     validate_outpaint_seam_px,
     validate_reference_images,
-    validate_reid_reference_images,
-    validate_reid_lora_strength,
     validate_subject_attention_ramp,
     validate_subject_attention_timing,
 )
 
 
 _DEFAULT_NEGATIVE_PROMPT = ""
-_LEGACY_VISION_FILENAME = "qwen3vl_4b_fp8_scaled.safetensors"
+_DEBUG_DIAGNOSTICS_ENV = "KREA2_IDENTITY_DEBUG"
+
+
+def _debug_diagnostics_enabled() -> bool:
+    return os.getenv(_DEBUG_DIAGNOSTICS_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _content_fingerprint(value):
     """Return a short, non-reversible fingerprint for generation diagnostics."""
+    import hashlib
+
     digest = hashlib.sha256()
     if torch.is_tensor(value):
         tensor = value.detach().to("cpu").contiguous()
@@ -128,6 +123,8 @@ def _content_fingerprint(value):
 
 def _sampled_conditioning_diagnostics(value, sample_count=4096):
     """Fingerprint grounded conditioning without copying the full tensor to CPU."""
+    import hashlib
+
     if not torch.is_tensor(value):
         return f"unsupported:{type(value).__name__}"
     flat = value.detach().reshape(-1)
@@ -149,45 +146,6 @@ def _sampled_conditioning_diagnostics(value, sample_count=4096):
     return (
         f"shape={tuple(value.shape)}, dtype={value.dtype}, samples={count}, "
         f"sha256={digest}, mean={sample.mean().item():.6f}, rms={rms:.6f}"
-    )
-
-
-def _sampled_kv_cache_diagnostics(caches, samples_per_tensor=128):
-    """Fingerprint isolated reference K/V without copying the full cache."""
-    if not caches:
-        return "blocks=0"
-    key_samples = []
-    value_samples = []
-    for cached in caches:
-        if not isinstance(cached, tuple) or len(cached) != 2:
-            return f"unsupported:{type(cached).__name__}"
-        for tensor, destination in zip(cached, (key_samples, value_samples)):
-            if not torch.is_tensor(tensor):
-                return f"unsupported:{type(tensor).__name__}"
-            flat = tensor.detach().reshape(-1)
-            count = min(max(1, int(samples_per_tensor)), int(flat.numel()))
-            if count == int(flat.numel()):
-                sample = flat
-            else:
-                indices = torch.linspace(
-                    0,
-                    int(flat.numel()) - 1,
-                    steps=count,
-                    device=flat.device,
-                    dtype=torch.float64,
-                ).round().to(torch.long)
-                sample = flat.index_select(0, indices)
-            destination.append(sample.float().cpu())
-    keys = torch.cat(key_samples).contiguous()
-    values = torch.cat(value_samples).contiguous()
-    digest = hashlib.sha256()
-    digest.update(keys.numpy().tobytes())
-    digest.update(values.numpy().tobytes())
-    return (
-        f"blocks={len(caches)}, samples={keys.numel() + values.numel()}, "
-        f"sha256={digest.hexdigest()[:12]}, "
-        f"k_rms={keys.square().mean().sqrt().item():.6f}, "
-        f"v_rms={values.square().mean().sqrt().item():.6f}"
     )
 
 
@@ -255,51 +213,6 @@ def _with_plugin_lora_phase_weights(loras_slists, phase_weights):
     return result
 
 
-def _with_phase_lora_weights(
-    loras_slists,
-    plugin_weights,
-    *,
-    user_scale=1.0,
-):
-    """Clone a schedule, set plugin weights, and uniformly scale user LoRAs."""
-    result = _with_plugin_lora_weights(loras_slists, plugin_weights)
-    dictionaries = [result]
-    dictionaries.extend(value for value in result.values() if isinstance(value, dict))
-    visited = set()
-
-    def scale(value):
-        if isinstance(value, list):
-            return [item * user_scale for item in value]
-        return value * user_scale
-
-    for schedules in dictionaries:
-        identity = id(schedules)
-        if identity in visited:
-            continue
-        visited.add(identity)
-        for phase in ("phase1", "phase2", "phase3"):
-            values = schedules.get(phase)
-            if not isinstance(values, list):
-                continue
-            for index in range(len(plugin_weights), len(values)):
-                values[index] = scale(values[index])
-    return result
-
-
-def _decoded_image_to_pil(images):
-    """Convert the first WanGP BxCxHxW uint8 result into an RGB PIL image."""
-    if images is None or len(images) != 1:
-        raise ValueError("Two-phase Depth then ReID requires one phase-1 image")
-    source_tensor = images[0].detach().cpu()
-    if source_tensor.ndim != 3 or source_tensor.shape[0] not in (3, 4):
-        raise ValueError(
-            "WanGP returned an unsupported phase-1 image tensor shape: "
-            f"{tuple(source_tensor.shape)}"
-        )
-    source_tensor = source_tensor[:3].permute(1, 2, 0)
-    return Image.fromarray(source_tensor.to(torch.uint8).numpy(), mode="RGB")
-
-
 def _wangp_control_to_pil(control, label):
     """Convert WanGP's first processed Control Image frame into RGB PIL."""
     if isinstance(control, Image.Image):
@@ -358,7 +271,6 @@ class GroundedQwen3VLConditioner(torch.nn.Module):
         self.select_layers = tuple(select_layers)
         self.max_prompt_tokens = int(max_prompt_tokens)
         self.reference_images = []
-        self.name_references = False
         self.grounding_px = DEFAULT_GROUNDING_PX
         self._interrupt = False
         self.allow_text_only = False
@@ -368,12 +280,9 @@ class GroundedQwen3VLConditioner(torch.nn.Module):
         images,
         grounding_px,
         max_pixels=None,
-        *,
-        name_references=False,
     ):
         self.grounding_px = validate_grounding_px(grounding_px)
         self.reference_images = []
-        self.name_references = bool(name_references)
         for image in images:
             image = image.convert("RGB")
             width, height = image.size
@@ -392,7 +301,6 @@ class GroundedQwen3VLConditioner(torch.nn.Module):
 
     def clear_references(self):
         self.reference_images = []
-        self.name_references = False
 
     def _bounded_prompt(self, prompt):
         prompt = str(prompt)
@@ -404,20 +312,10 @@ class GroundedQwen3VLConditioner(torch.nn.Module):
         )
 
     def _template(self, prompt):
-        if self.name_references:
-            # ReID's pinned Ostris pipeline and training contract name every
-            # Qwen vision placeholder before the user prompt. Keep this
-            # opt-in so the established Identity Edit message is unchanged.
-            vision = "".join(
-                f"Picture {index + 1}: "
-                "<|vision_start|><|image_pad|><|vision_end|>"
-                for index, _image in enumerate(self.reference_images)
-            )
-        else:
-            vision = "".join(
-                "<|vision_start|><|image_pad|><|vision_end|>"
-                for _ in self.reference_images
-            )
+        vision = "".join(
+            "<|vision_start|><|image_pad|><|vision_end|>"
+            for _ in self.reference_images
+        )
         return self.template_prefix + vision + self._bounded_prompt(prompt) + self.template_suffix
 
     def _encode_one(self, prompt, device):
@@ -946,92 +844,6 @@ def _registered_reference_positions(tokens, grid_size, bbox_normalized, device):
     return positions.reshape(1, -1, 3)
 
 
-def _reid_reference_positions(grid_size, device):
-    """Build Kontext index positions for ReID's one isolated reference."""
-    ref_height, ref_width = grid_size
-    positions = torch.zeros(ref_height, ref_width, 3, device=device)
-    positions[..., 0] = 1
-    positions[..., 1] = torch.arange(ref_height, device=device)[:, None]
-    positions[..., 2] = torch.arange(ref_width, device=device)[None, :]
-    return positions.reshape(1, -1, 3)
-
-
-def _mmgp_adapter_status(model, adapter_no):
-    """Report whether one MMGP adapter is bound, selected and scheduled."""
-    adapter = str(adapter_no)
-    owner = model
-    visited = set()
-    while id(owner) not in visited:
-        visited.add(id(owner))
-        candidate = getattr(owner, "_lora_owner", None)
-        if candidate is None or candidate is owner:
-            break
-        owner = candidate
-
-    active_adapters = getattr(owner, "_loras_active_adapters", None)
-    active = None
-    if active_adapters is not None:
-        active = adapter in {str(value) for value in active_adapters}
-
-    module_data = getattr(owner, "_loras_model_data", None)
-    bindings = None
-    if isinstance(module_data, dict):
-        bindings = sum(
-            1
-            for adapter_data in module_data.values()
-            if isinstance(adapter_data, dict) and adapter in adapter_data
-        )
-
-    scaling = getattr(owner, "_loras_scaling", None)
-    schedule = scaling.get(adapter) if isinstance(scaling, dict) else None
-    if torch.is_tensor(schedule):
-        schedule = schedule.detach().float().reshape(-1).tolist()
-    elif isinstance(schedule, (tuple, list)):
-        schedule = list(schedule)
-    if isinstance(schedule, list):
-        numeric = [float(value) for value in schedule]
-        schedule_summary = (
-            f"steps={len(numeric)}, first={numeric[0]:.4f}, "
-            f"last={numeric[-1]:.4f}, min={min(numeric):.4f}, "
-            f"max={max(numeric):.4f}"
-            if numeric
-            else "steps=0"
-        )
-    elif schedule is None:
-        schedule_summary = "unavailable"
-    else:
-        schedule_summary = f"constant={float(schedule):.4f}"
-
-    return {
-        "adapter": adapter,
-        "active": active,
-        "bindings": bindings,
-        "schedule": schedule_summary,
-        "step": getattr(owner, "_lora_step_no", None),
-    }
-
-
-def _log_required_mmgp_adapter(model, adapter_no, label):
-    """Log adapter evidence and reject a definitively inactive functional LoRA."""
-    status = _mmgp_adapter_status(model, adapter_no)
-    print(
-        f"[Krea2 Identity][{label}] MMGP adapter status: "
-        f"id={status['adapter']}, active={status['active']}, "
-        f"module_bindings={status['bindings']}, "
-        f"schedule=({status['schedule']}), step={status['step']}"
-    )
-    if status["active"] is False:
-        raise RuntimeError(
-            f"Krea 2 {label} adapter {status['adapter']} was loaded but is not active"
-        )
-    if status["bindings"] == 0:
-        raise RuntimeError(
-            f"Krea 2 {label} adapter {status['adapter']} did not bind to any "
-            "transformer modules"
-        )
-    return status
-
-
 def _precompute_registered_kv(transformer, ref_tokens, ref_pos):
     """Run the isolated reference stream once at flow time zero."""
     ref_hidden = transformer.first(ref_tokens)
@@ -1047,101 +859,6 @@ def _precompute_registered_kv(transformer, ref_tokens, ref_pos):
         if getattr(transformer, "_interrupt", False):
             return None
     return caches
-
-
-def _reid_build_joint_stream(model, target, context, pos, mask, reference, ref_pos):
-    """Build the official-style [text | target | reference] ReID stream."""
-    txtlen = context.shape[1]
-    target_len = target.shape[1]
-    reference_len = reference.shape[1]
-    batch = target.shape[0]
-    target_pos = pos[:, -target_len:]
-    if ref_pos.shape[0] == 1 and batch > 1:
-        ref_pos = ref_pos.expand(batch, -1, -1)
-    elif ref_pos.shape[0] != batch:
-        raise ValueError("ReID reference position batch does not match target batch")
-    combined = torch.cat((context, target, reference), dim=1)
-    combined_pos = torch.cat((pos[:, :txtlen], target_pos, ref_pos), dim=1)
-    combined_mask = None
-    if mask is not None:
-        reference_mask = torch.ones(
-            batch,
-            reference_len,
-            device=mask.device,
-            dtype=torch.bool,
-        )
-        combined_mask = torch.cat(
-            (mask[:, :txtlen], mask[:, -target_len:], reference_mask),
-            dim=1,
-        )
-    padlen = (-combined.shape[1]) % 256
-    if padlen:
-        combined = F.pad(combined, (0, 0, 0, padlen))
-        combined_pos = F.pad(combined_pos, (0, 0, 0, padlen))
-        if combined_mask is not None:
-            combined_mask = F.pad(combined_mask, (0, padlen), value=False)
-    freqs = model.posemb(combined_pos).to(combined.dtype)
-    return (
-        combined,
-        txtlen,
-        target_len,
-        reference_len,
-        freqs,
-        None if combined_mask is None else key_padding_mask(combined_mask),
-    )
-
-
-def _reid_joint_timestep_zero_block(
-    block,
-    hidden,
-    active_vec,
-    zero_vec,
-    reference_start,
-    freqs,
-    mask=None,
-):
-    """Process target and reference jointly, holding only the reference at t=0."""
-    active = block.mod(active_vec)
-    zero = block.mod(zero_vec)
-    normalized = block.prenorm(hidden)
-    normalized = torch.cat(
-        (
-            normalized[:, :reference_start] * (1 + active[0]) + active[1],
-            normalized[:, reference_start:] * (1 + zero[0]) + zero[1],
-        ),
-        dim=1,
-    )
-    attn_output, _captured = _outpaint_attention(
-        block.attn,
-        normalized,
-        freqs,
-        mask=mask,
-    )
-    gated_attention = torch.cat(
-        (
-            attn_output[:, :reference_start] * active[2],
-            attn_output[:, reference_start:] * zero[2],
-        ),
-        dim=1,
-    )
-    hidden = hidden + gated_attention
-    normalized = block.postnorm(hidden)
-    normalized = torch.cat(
-        (
-            normalized[:, :reference_start] * (1 + active[3]) + active[4],
-            normalized[:, reference_start:] * (1 + zero[3]) + zero[4],
-        ),
-        dim=1,
-    )
-    mlp_output = block.mlp(normalized)
-    gated_mlp = torch.cat(
-        (
-            mlp_output[:, :reference_start] * active[5],
-            mlp_output[:, reference_start:] * zero[5],
-        ),
-        dim=1,
-    )
-    return hidden + gated_mlp
 
 
 def _outpaint_forward(self, img, context, t, tvec, pos, mask=None, **_kwargs):
@@ -1181,92 +898,6 @@ def _outpaint_forward_cfg(
     return cond, uncond
 
 
-def _reid_forward(
-    self, img, context, t, tvec, pos, mask=None,
-    NAG=None, neg_context=None, neg_mask=None,
-    target_len=None,
-):
-    """Predict the target with selectable official or legacy ReID reference flow."""
-    del target_len
-    target, _sources = _project_identity_inputs(self, img, [])
-    method = getattr(self, "_reid_reference_method", "isolated_cache")
-    if method == "joint_timestep_zero":
-        ref_tokens = getattr(self, "_reid_ref_tokens", None)
-        ref_pos = getattr(self, "_reid_ref_pos", None)
-        if ref_tokens is None or ref_pos is None:
-            raise RuntimeError("ReID joint reference stream was not prepared")
-        reference = self.first(
-            _match_token_batch(ref_tokens, target.shape[0], "ReID reference")
-        )
-        combined, txtlen, target_len, reference_len, freqs, stream_mask = (
-            _reid_build_joint_stream(
-                self,
-                target,
-                context,
-                pos,
-                mask,
-                reference,
-                ref_pos,
-            )
-        )
-        zero_t = torch.zeros(
-            target.shape[0],
-            device=target.device,
-            dtype=target.dtype,
-        )
-        _zero_timestep, zero_vec = self.prepare_timestep(zero_t)
-        reference_start = txtlen + target_len
-        if not getattr(self, "_reid_joint_logged", False):
-            print(
-                "[Krea2 Identity][ReID] joint timestep-zero stream active: "
-                f"text={txtlen}, target={target_len}, reference={reference_len}, "
-                f"padded_total={combined.shape[1]}"
-            )
-            self._reid_joint_logged = True
-        for block in self.blocks:
-            combined = _reid_joint_timestep_zero_block(
-                block,
-                combined,
-                tvec,
-                zero_vec,
-                reference_start,
-                freqs,
-                mask=stream_mask,
-            )
-            if getattr(self, "_interrupt", False):
-                return None
-        return self.last([combined[:, txtlen : txtlen + target_len]], t)
-
-    caches = getattr(self, "_reid_ref_kv", None)
-    if not caches:
-        raise RuntimeError("ReID isolated reference K/V was not prepared")
-    combined, txtlen, imglen, freqs, stream_mask = self._build_stream(
-        target, context, pos, mask
-    )
-    for block, cached_kv in zip(self.blocks, caches):
-        combined, _ = _outpaint_block(
-            block, combined, tvec, freqs, mask=stream_mask, cached_kv=cached_kv
-        )
-        if getattr(self, "_interrupt", False):
-            return None
-    return self.last([combined[:, txtlen : txtlen + imglen]], t)
-
-
-def _reid_forward_cfg(
-    self, img, context, uncond_context, t, tvec, pos, uncond_pos,
-    mask, uncond_mask,
-    target_len=None,
-):
-    del target_len
-    cond = _reid_forward(self, img, context, t, tvec, pos, mask)
-    if cond is None:
-        return None, None
-    uncond = _reid_forward(
-        self, img, uncond_context, t, tvec, uncond_pos, uncond_mask
-    )
-    return cond, uncond
-
-
 def _attach_identity_transformer_methods(transformer):
     def dispatch_forward(target, *args, **kwargs):
         mode = getattr(target, "_conditioning_mode", "identity")
@@ -1274,8 +905,6 @@ def _attach_identity_transformer_methods(transformer):
             return _depth_forward(target, *args, **kwargs)
         if mode == "outpaint":
             return _outpaint_forward(target, *args, **kwargs)
-        if mode == "reid":
-            return _reid_forward(target, *args, **kwargs)
         return _identity_forward(target, *args, **kwargs)
 
     def dispatch_forward_cfg(target, *args, **kwargs):
@@ -1284,8 +913,6 @@ def _attach_identity_transformer_methods(transformer):
             return _depth_forward_cfg(target, *args, **kwargs)
         if mode == "outpaint":
             return _outpaint_forward_cfg(target, *args, **kwargs)
-        if mode == "reid":
-            return _reid_forward_cfg(target, *args, **kwargs)
         return _identity_forward_cfg(target, *args, **kwargs)
 
     transformer.forward = types.MethodType(dispatch_forward, transformer)
@@ -1305,11 +932,6 @@ def _attach_identity_transformer_methods(transformer):
     transformer._identity_step_index = -1
     transformer._identity_last_timestep = None
     transformer._outpaint_ref_kv = None
-    transformer._reid_ref_kv = None
-    transformer._reid_ref_tokens = None
-    transformer._reid_ref_pos = None
-    transformer._reid_reference_method = "isolated_cache"
-    transformer._reid_joint_logged = False
     transformer._depth_control_weight_cpu = None
     transformer._depth_control_runtime_weight = None
     transformer._depth_control_tokens = None
@@ -1345,11 +967,12 @@ class IdentityKrea2Pipeline(Krea2Pipeline):
         hidden, masks = self.encoder(prompts, device=device)
         if hidden is None:
             return None, None
-        print(
-            "[Krea2 Identity][Encoder] grounded conditioning: "
-            f"{_sampled_conditioning_diagnostics(hidden)}, "
-            f"active_tokens={int(masks.sum().item())}/{masks.numel()}"
-        )
+        if _debug_diagnostics_enabled():
+            print(
+                "[Krea2 Identity][Debug][Encoder] grounded conditioning: "
+                f"{_sampled_conditioning_diagnostics(hidden)}, "
+                f"active_tokens={int(masks.sum().item())}/{masks.numel()}"
+            )
         return hidden.to(device=device, dtype=dtype), masks.to(device=device)
 
     def _encode_identity_reference(
@@ -1387,28 +1010,6 @@ class IdentityKrea2Pipeline(Krea2Pipeline):
         )
         patch = self.transformer.config.patch
         return latent, (latent.shape[-2] // patch, latent.shape[-1] // patch)
-
-    def _encode_reid_reference(self, image, width, height, device, dtype, seed):
-        """Encode ReID exactly like its pinned pipeline: posterior sample, not mode."""
-        from shared.utils.utils import convert_image_to_tensor
-
-        image = image.convert("RGB")
-        tensor = (
-            convert_image_to_tensor(image)
-            .unsqueeze(0)
-            .unsqueeze(2)
-            .to(device=device, dtype=self.vae.dtype)
-        )
-        generator = torch.Generator(device=device).manual_seed(int(seed))
-        latents = self.vae.encode(tensor).latent_dist.sample(generator)
-        latents_mean = torch.tensor(self.vae.config.latents_mean).view(
-            1, self.channels, 1, 1, 1
-        ).to(latents.device, latents.dtype)
-        latents_std = torch.tensor(self.vae.config.latents_std).view(
-            1, self.channels, 1, 1, 1
-        ).to(latents.device, latents.dtype)
-        latents = (latents - latents_mean) / latents_std
-        return latents[:, :, 0].to(device=device, dtype=dtype)
 
     @staticmethod
     def _first_control_frame(control, label):
@@ -1735,119 +1336,6 @@ class IdentityKrea2Pipeline(Krea2Pipeline):
             self.encoder.clear_references()
 
     @torch.inference_mode()
-    def generate_reid(
-        self,
-        *args,
-        reference_images,
-        reid_reference_method="isolated_cache",
-        depth_control=None,
-        depth_mask=None,
-        depth_mask_feather_px=16,
-        **kwargs,
-    ):
-        """Generate with one ReID reference using the selected reference flow."""
-        if reid_reference_method not in {"joint_timestep_zero", "isolated_cache"}:
-            raise ValueError(
-                "reid_reference_method must be 'joint_timestep_zero' or "
-                "'isolated_cache'"
-            )
-        references = validate_reid_reference_images(reference_images)
-        width = int(kwargs.get("width", 1024))
-        height = int(kwargs.get("height", 1024))
-        device, dtype = self.runtime_device, self.dtype
-        reference = references[0].convert("RGB")
-        ref_width, ref_height = fit_reference_pixel_budget(
-            reference.size,
-            max_pixels=REID_VAE_MAX_PIXELS,
-        )
-        if reference.size != (ref_width, ref_height):
-            # Match the released ReID pipeline's aspect-preserving resize.
-            reference = reference.resize(
-                (ref_width, ref_height), Image.Resampling.BILINEAR
-            )
-        latent = self._encode_reid_reference(
-            reference,
-            ref_width,
-            ref_height,
-            device,
-            dtype,
-            kwargs.get("seed", 0),
-        )
-        ref_tokens = _pack_image_latents(latent, self.transformer.config.patch)
-        ref_grid = (
-            latent.shape[-2] // self.transformer.config.patch,
-            latent.shape[-1] // self.transformer.config.patch,
-        )
-        ref_pos = _reid_reference_positions(ref_grid, device)
-        self.encoder.set_references(
-            [reference],
-            384,
-            max_pixels=REID_QWEN_MAX_PIXELS,
-            name_references=True,
-        )
-        self.transformer._conditioning_mode = "reid"
-        try:
-            if not self._prepare_depth_runtime(
-                depth_control,
-                depth_mask,
-                depth_mask_feather_px,
-                width,
-                height,
-                device,
-                dtype,
-            ):
-                return None
-            from shared.utils.loras_mutipliers import update_loras_slists
-
-            update_loras_slists(
-                self.transformer,
-                kwargs.get("loras_slists"),
-                int(kwargs.get("steps", REID_INFERENCE_STEPS)),
-            )
-            offload.set_step_no_for_lora(self.transformer, 0)
-            _log_required_mmgp_adapter(self.transformer, 0, "ReID")
-            self.transformer._reid_reference_method = reid_reference_method
-            self.transformer._reid_joint_logged = False
-            if reid_reference_method == "joint_timestep_zero":
-                self.transformer._reid_ref_tokens = ref_tokens
-                self.transformer._reid_ref_pos = ref_pos
-                print(
-                    "[Krea2 Identity][ReID] joint reference stream ready: "
-                    f"vae_pixels={ref_width}x{ref_height}, "
-                    f"vae_max_pixels={REID_VAE_MAX_PIXELS}, "
-                    f"qwen_pixels={reference.width}x{reference.height}, "
-                    f"tokens={tuple(ref_tokens.shape)}, "
-                    f"qwen_max_pixels={REID_QWEN_MAX_PIXELS}, "
-                    "reference_timestep=zero, qwen_grounding=Picture 1, "
-                    "vae=posterior-sample"
-                )
-            else:
-                self.transformer._reid_ref_kv = _precompute_registered_kv(
-                    self.transformer, ref_tokens, ref_pos
-                )
-                if self.transformer._reid_ref_kv is None:
-                    return None
-                print(
-                    "[Krea2 Identity][ReID] isolated reference cache ready: "
-                    f"vae_pixels={ref_width}x{ref_height}, "
-                    f"vae_max_pixels={REID_VAE_MAX_PIXELS}, "
-                    f"qwen_pixels={reference.width}x{reference.height}, "
-                    f"tokens={tuple(ref_tokens.shape)}, "
-                    f"cache=({_sampled_kv_cache_diagnostics(self.transformer._reid_ref_kv)}), "
-                    f"qwen_max_pixels={REID_QWEN_MAX_PIXELS}, "
-                    "qwen_grounding=Picture 1, vae=posterior-sample"
-                )
-            return super().__call__(*args, **kwargs)
-        finally:
-            self.transformer._reid_ref_kv = None
-            self.transformer._reid_ref_tokens = None
-            self.transformer._reid_ref_pos = None
-            self.transformer._reid_joint_logged = False
-            self.transformer._conditioning_mode = "identity"
-            self._clear_depth_runtime()
-            self.encoder.clear_references()
-
-    @torch.inference_mode()
     def generate_depth_prompt(
         self,
         *args,
@@ -1889,13 +1377,29 @@ class IdentityKrea2Pipeline(Krea2Pipeline):
         *args,
         source_image,
         outpainting_dims,
+        outpainting_ratio="",
         seam_px=32,
         **kwargs,
     ):
         """Generate an expanded canvas with registered, isolated source attention."""
         width = int(kwargs.get("width", 1024))
         height = int(kwargs.get("height", 1024))
-        bbox = canvas_bbox(source_image.size, (width, height), outpainting_dims)
+        ratio_mode = bool(str(outpainting_ratio or "").strip())
+        bbox = canvas_bbox(
+            source_image.size,
+            (width, height),
+            outpainting_dims,
+            ratio_mode=ratio_mode,
+        )
+        x0, y0, x1, y1 = bbox
+        print(
+            "[Krea2 Identity][Outpaint] registered geometry: "
+            f"source={source_image.width}x{source_image.height}, "
+            f"canvas={width}x{height}, input={list(outpainting_dims)}, "
+            f"ratio={outpainting_ratio or 'manual'}, bbox={bbox}, "
+            f"generated=top:{y0}/bottom:{height - y1}/"
+            f"left:{x0}/right:{width - x1}"
+        )
         prepared = prepare_source(
             source_image, (width, height), bbox, seam_px=seam_px
         )
@@ -1962,17 +1466,10 @@ class IdentityKrea2Pipeline(Krea2Pipeline):
             self.encoder.clear_references()
 
 
-def _uses_legacy_encoder_stack(text_encoder_filename) -> bool:
-    basename = os.path.basename(os.fspath(text_encoder_filename)).lower()
-    return "quanto" in basename or "int8" in basename
-
-
 def _load_grounded_qwen(
     text_encoder_filename,
     config_path,
     dtype,
-    *,
-    visual_filename=None,
 ):
     register_qwen3_vl_config()
     config = Qwen3VLConfig.from_json_file(config_path)
@@ -1983,44 +1480,13 @@ def _load_grounded_qwen(
     # modules, matching WanGP's own Krea 2 language-model loader.
     qwen.language_model.rotary_emb.reset_inv_freq()
     qwen.visual.rotary_pos_emb.reset_inv_freq()
-    if visual_filename is None:
-        # Current WanGP v12.34 Edit contract: language and vision weights come
-        # from the complete BF16 Qwen3-VL checkpoint.
-        offload.load_model_data(
-            qwen,
-            text_encoder_filename,
-            writable_tensors=False,
-            default_dtype=dtype,
-        )
-    else:
-        # Legacy plugin contract retained strictly as an A/B diagnostic: the
-        # host-selected Quanto checkpoint supplies the language model while
-        # Comfy-Org's scaled-FP8 checkpoint supplies the visual tower.
-        offload.load_model_data(
-            qwen.language_model,
-            text_encoder_filename,
-            modelPrefix="language_model",
-            writable_tensors=False,
-            default_dtype=dtype,
-        )
-        visual_prefix = "model.visual."
-        with safe_open(visual_filename, framework="pt", device="cpu") as reader:
-            visual_state_dict = {
-                key[len(visual_prefix) :]: reader.get_tensor(key)
-                for key in reader.keys()
-                if key.startswith(visual_prefix)
-            }
-        if not visual_state_dict:
-            raise RuntimeError(
-                f"The legacy Qwen3-VL checkpoint has no {visual_prefix} weights: "
-                f"{visual_filename}"
-            )
-        offload.load_model_data(
-            qwen.visual,
-            visual_state_dict,
-            writable_tensors=False,
-            default_dtype=dtype,
-        )
+    # The complete BF16 checkpoint supplies both language and vision weights.
+    offload.load_model_data(
+        qwen,
+        text_encoder_filename,
+        writable_tensors=False,
+        default_dtype=dtype,
+    )
     qwen.eval().requires_grad_(False)
     return qwen
 
@@ -2047,7 +1513,6 @@ class model_factory:
         )
         transformer_filename = _resolve_wangp_checkpoint(transformer_filename)
         text_encoder_filename = _resolve_wangp_checkpoint(text_encoder_filename)
-        legacy_encoder_stack = _uses_legacy_encoder_stack(text_encoder_filename)
         transformer = _load_transformer(
             transformer_filename, _TRANSFORMER_CONFIG_PATH, dtype
         )
@@ -2059,16 +1524,10 @@ class model_factory:
             )
         text_encoder_folder = model_def["text_encoder_folder"]
         config_path = fl.locate_file(os.path.join(text_encoder_folder, "config.json"))
-        visual_filename = None
-        if legacy_encoder_stack:
-            visual_filename = fl.locate_file(
-                os.path.join("text_encoders", _LEGACY_VISION_FILENAME)
-            )
         qwen = _load_grounded_qwen(
             text_encoder_filename,
             config_path,
             dtype,
-            visual_filename=visual_filename,
         )
         tokenizer_path = os.path.dirname(
             fl.locate_file(os.path.join(text_encoder_folder, "tokenizer_config.json"))
@@ -2078,28 +1537,13 @@ class model_factory:
             trust_remote_code=True,
             extra_special_tokens={},
         )
-        if legacy_encoder_stack:
-            image_processor = Qwen2VLImageProcessor(
-                patch_size=16,
-                temporal_patch_size=2,
-                merge_size=2,
-                image_mean=[0.5, 0.5, 0.5],
-                image_std=[0.5, 0.5, 0.5],
-            )
-            processor = Qwen2VLProcessor(
-                image_processor=image_processor,
-                tokenizer=tokenizer,
-                video_processor=BaseVideoProcessor(),
-            )
-            encoder_stack = "legacy-quanto-language+comfy-fp8-vision"
-        else:
-            image_processor = Qwen2VLImageProcessorFast.from_pretrained(tokenizer_path)
-            processor = Krea2Qwen3VLProcessor(image_processor, tokenizer)
-            encoder_stack = "current-unified-bf16"
+        image_processor = Qwen2VLImageProcessorFast.from_pretrained(tokenizer_path)
+        processor = Krea2Qwen3VLProcessor(image_processor, tokenizer)
         print(
             "[Krea2 Identity][Encoder] "
-            f"stack={encoder_stack}, language={os.path.basename(text_encoder_filename)}, "
-            f"vision={os.path.basename(visual_filename) if visual_filename else 'same-checkpoint'}"
+            "stack=unified-bf16, "
+            f"language={os.path.basename(text_encoder_filename)}, "
+            "vision=same-checkpoint"
         )
         vae = _load_vae(
             fl.locate_file("qwen_vae.safetensors"),
@@ -2126,20 +1570,7 @@ class model_factory:
         settings = expand_advanced_settings(custom_settings)
         identity_profile = settings.get("identity_method")
         identity_method = validate_identity_method(identity_profile)
-        _two_phase, _phase2_denoise, _phase2_depth, outpaint_mode = (
-            resolve_generation_process(settings)
-        )
-        if not reid_experiments_enabled() and (
-            identity_method == "reid"
-            or _two_phase == "depth_then_reid"
-            or direct_image_control_selected(video_prompt_type)
-        ):
-            raise ValueError(REID_EXPERIMENTS_DISABLED_MESSAGE)
-        if identity_method == "reid":
-            if self.base_model_type != "krea2_identity_turbo":
-                raise ValueError("Krea 2 ReID is available only with Krea 2 Identity Turbo")
-            if outpaint_mode != "off":
-                raise ValueError("Krea 2 ReID cannot be combined with Registered Outpaint")
+        _, _, _, outpaint_mode = resolve_generation_process(settings)
         if outpaint_mode == "outpaint_only":
             return [outpaint_lora_url()], [1.0]
         depth_strength = validate_depth_control_strength(
@@ -2149,20 +1580,11 @@ class model_factory:
             if not depth_control_selected(video_prompt_type) or depth_strength <= 0:
                 return [], []
             return [depth_control_lora_url()], [depth_strength]
-        functional_lora = (
-            reid_lora_url()
-            if identity_method == "reid"
-            else identity_lora_url(
-                settings.get("identity_lora_variant", "full_v1.2")
-            )
+        functional_lora = identity_lora_url(
+            settings.get("identity_lora_variant", "full_v1.2")
         )
         loras = [functional_lora]
-        reid_lora_strength = validate_reid_lora_strength(
-            settings.get("reid_lora_strength")
-        )
-        multipliers = [
-            reid_lora_strength if identity_method == "reid" else 1.0
-        ]
+        multipliers = [1.0]
         if depth_control_selected(video_prompt_type) and depth_strength > 0:
             loras.append(depth_control_lora_url())
             multipliers.append(depth_strength)
@@ -2199,6 +1621,10 @@ class model_factory:
         **kwargs,
     ):
         settings = expand_advanced_settings(custom_settings)
+        registered_outpaint_ratio = str(
+            settings.get("_registered_outpaint_ratio", "") or ""
+        ).strip()
+        outpaint_prompt = str(settings.get("outpaint_prompt", "") or "").strip()
         identity_profile = settings.get("identity_method")
         identity_method = validate_identity_method(identity_profile)
         reference_subject_boost, reference_scene_boost = (
@@ -2218,44 +1644,15 @@ class model_factory:
                 raise ValueError(
                     "WanGP processed reference count does not match the uploaded references"
                 )
-        if identity_method == "reid":
-            original_references = validate_reid_reference_images(original_references)
-            references = validate_reid_reference_images(references)
-            if self.base_model_type != "krea2_identity_turbo":
-                raise ValueError("Krea 2 ReID is available only with Krea 2 Identity Turbo")
-        (
-            two_phase_mode,
-            phase2_denoising_strength,
-            phase2_depth_mode,
-            outpaint_mode,
-        ) = resolve_generation_process(settings)
-        if not reid_experiments_enabled() and (
-            identity_method == "reid"
-            or two_phase_mode == "depth_then_reid"
-            or direct_image_control_selected(video_prompt_type)
-        ):
-            raise ValueError(REID_EXPERIMENTS_DISABLED_MESSAGE)
-        if identity_method == "reid" and outpaint_mode != "off":
-            raise ValueError("Krea 2 ReID cannot be combined with Registered Outpaint")
+        _, _, _, outpaint_mode = resolve_generation_process(settings)
         if identity_method == "depth_prompt" and outpaint_mode != "off":
             raise ValueError("Depth + prompt only cannot use Registered Outpaint")
         seam_px = validate_outpaint_seam_px(settings.get("outpaint_seam_px"))
         grounding_px = validate_grounding_px(settings.get("grounding_px"))
-        reid_lora_strength = validate_reid_lora_strength(
-            settings.get("reid_lora_strength")
-        )
-        reid_reference_method = settings.get(
-            "reid_reference_method", "isolated_cache"
-        )
-        secondary_reference_geometry = settings.get(
-            "secondary_reference_geometry", "fit"
-        )
         output_resolution_limit = settings.get(
             "output_resolution_limit", "safe_2mp"
         )
-        if identity_method == "reid":
-            reid_lora_url()
-        elif identity_method == "identity_edit":
+        if identity_method == "identity_edit":
             identity_lora_url(settings.get("identity_lora_variant", "full_v1.2"))
         depth_strength = validate_depth_control_strength(
             settings.get("depth_control_strength", denoising_strength)
@@ -2301,34 +1698,24 @@ class model_factory:
             raise ValueError(
                 "Depth + prompt only requires Transfer Depth with depth strength greater than 0"
             )
-        if two_phase_mode == "depth_then_reid":
-            if self.base_model_type != "krea2_identity_turbo":
-                raise ValueError("Two-phase Depth then ReID requires Krea 2 Turbo")
-            if identity_method != "reid":
-                raise ValueError("Two-phase Depth then ReID requires the ReID identity method")
-            if outpaint_mode != "off":
-                raise ValueError("Two-phase Depth then ReID cannot use Registered Outpaint")
-            if not depth_active:
-                raise ValueError(
-                    "Two-phase Depth then ReID requires Transfer Depth with "
-                    "depth strength greater than 0"
-                )
-            if int(batch_size) != 1:
-                raise ValueError("Two-phase Depth then ReID currently requires batch size 1")
         if direct_image_active:
-            if identity_method != "reid":
+            if identity_method != "identity_edit":
                 raise ValueError(
-                    "Direct Image → ReID Edit requires the ReID identity method"
+                    "Direct Image → Identity Edit requires an Identity Edit method"
                 )
             if depth_control_mask_selected(video_prompt_type) or "A" in str(
                 video_prompt_type or ""
             ):
                 raise ValueError(
-                    "Direct Image → ReID Edit currently supports Whole Frame only"
+                    "Direct Image → Identity Edit currently supports Whole Frame only"
+                )
+            if outpaint_mode != "off":
+                raise ValueError(
+                    "Direct Image → Identity Edit cannot be combined with Registered Outpaint"
                 )
             if input_frames is None:
                 raise ValueError(
-                    "Direct Image → ReID Edit requires a processed Control Image"
+                    "Direct Image → Identity Edit requires a processed Control Image"
                 )
         depth_control = input_frames if depth_active else None
         direct_image_control = input_frames if direct_image_active else None
@@ -2391,23 +1778,27 @@ class model_factory:
             if identity_method == "depth_prompt"
             else output_resolution_limit
         )
-        print(
-            "[Krea2 Identity][Inputs] "
+        input_details = (
             f"identity_method={identity_method}, "
-            f"reid_lora_strength={reid_lora_strength:.2f}, "
-            f"reid_reference_method={reid_reference_method}, "
             f"reference_boosts=subject:{reference_subject_boost:.2f}x/"
             f"scene:{reference_scene_boost:.2f}x, "
-            f"secondary_geometry={secondary_reference_geometry}, "
+            "secondary_geometry=fit, "
             f"output_resolution_limit={output_resolution_policy}, "
             f"mode={video_prompt_type or 'none'}, "
-            f"original_refs={_fingerprint_list(original_references)}, "
-            f"processed_refs={_fingerprint_list(references)}, "
-            f"processed_depth={_content_fingerprint(depth_control)}, "
-            f"direct_source={_content_fingerprint(direct_image_control)}, "
-            f"mask={_content_fingerprint(depth_mask)}, "
+            f"reference_count={len(original_references)}, "
+            f"depth_active={depth_control is not None}, "
+            f"direct_image_active={direct_image_control is not None}, "
             f"mask_source={mask_source}"
         )
+        if _debug_diagnostics_enabled():
+            input_details += (
+                f", original_refs={_fingerprint_list(original_references)}, "
+                f"processed_refs={_fingerprint_list(references)}, "
+                f"processed_depth={_content_fingerprint(depth_control)}, "
+                f"direct_source={_content_fingerprint(direct_image_control)}, "
+                f"mask={_content_fingerprint(depth_mask)}"
+            )
+        print(f"[Krea2 Identity][Inputs] {input_details}")
         requested_width, requested_height = width, height
         identity_width, identity_height = width, height
         resolution_kwargs = (
@@ -2423,7 +1814,7 @@ class model_factory:
             else:
                 aspect_source = (
                     (width, height)
-                    if identity_method == "reid"
+                    if direct_image_active
                     else original_references[0].size
                 )
                 identity_width, identity_height = match_reference_dimensions(
@@ -2478,16 +1869,9 @@ class model_factory:
             guide_scale, mu = 0, 1.15
         else:
             mu = None
-        if identity_method == "reid":
-            if sampling_steps != REID_INFERENCE_STEPS:
-                print(
-                    "[Krea2 Identity][ReID] overriding sampling steps "
-                    f"from {sampling_steps} to {REID_INFERENCE_STEPS}"
-                )
-            sampling_steps = REID_INFERENCE_STEPS
-            guide_scale = 0
         generator_seed = seed if seed is not None and seed >= 0 else torch.seed()
         prompts = [input_prompt] * int(batch_size)
+        outpaint_prompts = [outpaint_prompt] * int(batch_size)
         common = dict(
             negative_prompts=[n_prompt or _DEFAULT_NEGATIVE_PROMPT] * len(prompts),
             width=width,
@@ -2501,16 +1885,21 @@ class model_factory:
             NAG_tau=NAG_tau,
             NAG_alpha=NAG_alpha,
         )
+        outpaint_common = dict(common)
+        outpaint_common["negative_prompts"] = [
+            _DEFAULT_NEGATIVE_PROMPT
+        ] * len(outpaint_prompts)
         if outpaint_mode == "outpaint_only":
             if len(original_references) != 1:
                 raise ValueError("Outpaint-only requires exactly one uploaded source image")
             images = self.pipeline.generate_registered_outpaint(
-                prompts,
+                outpaint_prompts,
                 loras_slists=loras_slists,
                 source_image=original_references[0],
                 outpainting_dims=outpainting_dims,
+                outpainting_ratio=registered_outpaint_ratio,
                 seam_px=seam_px,
-                **common,
+                **outpaint_common,
             )
             return None if images is None else images.transpose(0, 1)
 
@@ -2526,17 +1915,21 @@ class model_factory:
             # encode the untouched upload at its own aspect ratio; phase two
             # expands the generated result onto the requested canvas.
             identity_pass_references = original_references
+            reference_details = ""
+            if _debug_diagnostics_enabled():
+                reference_details = (
+                    f", refs={_fingerprint_list(identity_pass_references)}"
+                )
             print(
                 "[Krea2 Identity][Outpaint] identity phase reference source="
-                f"original-upload, refs={_fingerprint_list(identity_pass_references)}"
+                f"original-upload{reference_details}"
             )
 
         identity_slists = loras_slists
         if outpaint_mode == "identity_then_outpaint":
             identity_slists = _with_plugin_lora_weights(loras_slists, [1.0, 0.0])
         if (
-            two_phase_mode == "off"
-            and depth_active
+            depth_active
             and depth_user_lora_timing == "depth_first"
         ):
             plugin_head_count = 1 if identity_method == "depth_prompt" else 2
@@ -2554,8 +1947,7 @@ class model_factory:
                     f"middle={middle:.2f}, final={final:.2f}"
                 )
         if (
-            two_phase_mode == "off"
-            and identity_method == "identity_edit"
+            identity_method == "identity_edit"
             and depth_active
             and builtin_adapter_timing == "depth_then_identity"
         ):
@@ -2574,65 +1966,7 @@ class model_factory:
             )
         identity_common = dict(common)
         identity_common.update(width=identity_width, height=identity_height)
-        if two_phase_mode == "depth_then_reid":
-            phase1_slists = _with_phase_lora_weights(
-                loras_slists,
-                [0.0, depth_strength],
-                user_scale=0.0,
-            )
-            print(
-                "[Krea2 Identity][Two Phase] phase 1/2: Depth + Prompt, "
-                "identity=0.00, additional_loras=0.00"
-            )
-            phase1_images = self.pipeline.generate_depth_prompt(
-                prompts,
-                loras_slists=phase1_slists,
-                depth_control=depth_control,
-                depth_mask=depth_mask,
-                depth_mask_feather_px=depth_mask_feather_px,
-                **identity_common,
-            )
-            if phase1_images is None or self._interrupt:
-                return None
-            phase1_source = _decoded_image_to_pil(phase1_images)
-            full_frame_mask = Image.new("L", phase1_source.size, 255)
-            keep_phase2_depth = phase2_depth_mode == "keep"
-            phase2_slists = _with_phase_lora_weights(
-                loras_slists,
-                [
-                    reid_lora_strength,
-                    depth_strength if keep_phase2_depth else 0.0,
-                ],
-                user_scale=1.0,
-            )
-            first_phase2_step = int(
-                sampling_steps * (1.0 - phase2_denoising_strength)
-            )
-            effective_phase2_steps = sampling_steps - first_phase2_step
-            print(
-                "[Krea2 Identity][Two Phase] phase 2/2: ReID refinement, "
-                f"denoising={phase2_denoising_strength:.2f}, "
-                f"effective_steps={effective_phase2_steps}/{sampling_steps}, "
-                f"depth={'on' if keep_phase2_depth else 'off'}, "
-                f"reid_lora_strength={reid_lora_strength:.2f}, "
-                "additional_loras=selected strengths"
-            )
-            images = self.pipeline.generate_reid(
-                prompts,
-                loras_slists=phase2_slists,
-                reference_images=references,
-                reid_reference_method=reid_reference_method,
-                depth_control=depth_control if keep_phase2_depth else None,
-                depth_mask=depth_mask if keep_phase2_depth else None,
-                depth_mask_feather_px=depth_mask_feather_px,
-                source_image=phase1_source,
-                image_mask=full_frame_mask,
-                denoising_strength=phase2_denoising_strength,
-                masking_strength=1.0,
-                model_mode=0,
-                **identity_common,
-            )
-        elif identity_method == "depth_prompt":
+        if identity_method == "depth_prompt":
             images = self.pipeline.generate_depth_prompt(
                 prompts,
                 loras_slists=identity_slists,
@@ -2641,7 +1975,7 @@ class model_factory:
                 depth_mask_feather_px=depth_mask_feather_px,
                 **identity_common,
             )
-        elif identity_method == "reid" and direct_image_active:
+        elif direct_image_active:
             direct_source = _wangp_control_to_pil(
                 direct_image_control, "Direct Image Control"
             )
@@ -2650,32 +1984,33 @@ class model_factory:
                 sampling_steps * (1.0 - direct_image_denoising)
             )
             print(
-                "[Krea2 Identity][Direct Image] ReID refinement: "
+                "[Krea2 Identity][Direct Image] Identity Edit refinement: "
                 f"source={direct_source.width}x{direct_source.height}, "
                 f"denoising={direct_image_denoising:.2f}, "
                 f"effective_steps={effective_steps}/{sampling_steps}"
             )
-            images = self.pipeline.generate_reid(
+            images = self.pipeline.generate_identity(
                 prompts,
                 loras_slists=identity_slists,
-                reference_images=references,
-                reid_reference_method=reid_reference_method,
+                reference_images=identity_pass_references,
+                grounding_px=grounding_px,
+                reference_subject_boost=reference_subject_boost,
+                reference_scene_boost=reference_scene_boost,
+                subject_attention_timing=subject_attention_timing,
+                subject_attention_ramp=subject_attention_ramp,
+                builtin_adapter_timing=builtin_adapter_timing,
+                builtin_depth_ramp=builtin_depth_ramp,
+                fit_all_references=False,
+                fit_secondary_reference=True,
+                depth_control=None,
+                depth_mask=None,
+                depth_mask_feather_px=depth_mask_feather_px,
+                depth_control_strength=0.0,
                 source_image=direct_source,
                 image_mask=full_frame_mask,
                 denoising_strength=direct_image_denoising,
                 masking_strength=1.0,
                 model_mode=0,
-                **identity_common,
-            )
-        elif identity_method == "reid":
-            images = self.pipeline.generate_reid(
-                prompts,
-                loras_slists=identity_slists,
-                reference_images=references,
-                reid_reference_method=reid_reference_method,
-                depth_control=depth_control,
-                depth_mask=depth_mask,
-                depth_mask_feather_px=depth_mask_feather_px,
                 **identity_common,
             )
         else:
@@ -2691,7 +2026,7 @@ class model_factory:
                 builtin_adapter_timing=builtin_adapter_timing,
                 builtin_depth_ramp=builtin_depth_ramp,
                 fit_all_references=False,
-                fit_secondary_reference=secondary_reference_geometry == "fit",
+                fit_secondary_reference=True,
                 depth_control=depth_control,
                 depth_mask=depth_mask,
                 depth_mask_feather_px=depth_mask_feather_px,
@@ -2710,12 +2045,13 @@ class model_factory:
             source = Image.fromarray(source_tensor.to(torch.uint8).numpy())
             outpaint_slists = _with_plugin_lora_weights(loras_slists, [0.0, 1.0])
             images = self.pipeline.generate_registered_outpaint(
-                prompts,
+                outpaint_prompts,
                 loras_slists=outpaint_slists,
                 source_image=source,
                 outpainting_dims=outpainting_dims,
+                outpainting_ratio=registered_outpaint_ratio,
                 seam_px=seam_px,
-                **common,
+                **outpaint_common,
             )
         return None if images is None else images.transpose(0, 1)
 

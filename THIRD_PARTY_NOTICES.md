@@ -110,28 +110,6 @@ not legal advice.
 - Model weights are downloaded separately and are not committed here.
 - This is unofficial and is not endorsed by Krea or Ostris.
 
-## Krea 2 ReID
-
-- Adapter: <https://huggingface.co/yijunwang2/krea2-reid>, file
-  `krea2_reid_rank32.safetensors`.
-- Adapter terms: Krea 2 Community License Agreement supplied by its repository.
-- Pinned inference pipeline: `yijunwang2/krea2-reid` revision
-  `121fb0183944f1befeb712d92e9ca07d0e282088`, Apache License 2.0,
-  copyright 2026 Ostris, LLC; the repository states its `pipeline.py` was
-  pinned from `ostris/Krea2OstrisEdit`.
-- The runtime independently adapts the published single-reference,
-  aspect-preserving 384²-area view shared by Qwen and the clean-reference VAE,
-  frame indexing, and isolated per-block post-RoPE K/V captured at timestep
-  zero and injected during target denoising through WanGP's native transformer
-  and MMGP scheduling interfaces. The plugin also retains an experimental joint
-  timestep-zero target/reference stream as a diagnostic path. No external pipeline file or model
-  weight is bundled.
-- Optional automatic face/head cropping adapts the repository's MIT-licensed
-  `face_crop.py` helper. Its YuNet INT8 ONNX detector is declared as a separate
-  runtime download from `yijunwang2/krea2-reid/models`; detector weights are not
-  committed here. The plugin also retains a Keep full reference option.
-- This is unofficial and is not endorsed by Krea or Ostris.
-
 ## Repository code license
 
 - Original plugin code: Apache License 2.0; see `LICENSE`.

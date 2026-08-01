@@ -19,7 +19,7 @@ class ScaffoldTests(unittest.TestCase):
         self.assertTrue((ROOT / "models" / "krea2_advanced_settings.py").is_file())
         self.assertTrue((ROOT / "models" / "krea2_depth_preview.py").is_file())
 
-    def test_model_architectures_are_unique_and_visible_for_preview(self):
+    def test_model_architectures_are_unique_and_hidden_before_gpu_acceptance(self):
         architectures = set()
         for path in sorted((ROOT / "defaults").glob("*.json")):
             definition = json.loads(path.read_text(encoding="utf-8"))
@@ -27,7 +27,7 @@ class ScaffoldTests(unittest.TestCase):
             architecture = model["architecture"]
             self.assertNotIn(architecture, architectures)
             self.assertTrue(architecture.startswith("krea2_identity_"))
-            self.assertTrue(model["visible"])
+            self.assertFalse(model["visible"])
             architectures.add(architecture)
         self.assertEqual(
             architectures,

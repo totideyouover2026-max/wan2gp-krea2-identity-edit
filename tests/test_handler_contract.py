@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import sys
 import types
 import unittest
@@ -52,62 +51,28 @@ def load_handler_module():
 class HandlerContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._previous_reid_flag = os.environ.get(
-            "KREA2_IDENTITY_ENABLE_REID_EXPERIMENTS"
-        )
-        os.environ["KREA2_IDENTITY_ENABLE_REID_EXPERIMENTS"] = "1"
         cls.module = load_handler_module()
         cls.handler = cls.module.family_handler
 
-    @classmethod
-    def tearDownClass(cls):
-        if cls._previous_reid_flag is None:
-            os.environ.pop("KREA2_IDENTITY_ENABLE_REID_EXPERIMENTS", None)
-        else:
-            os.environ["KREA2_IDENTITY_ENABLE_REID_EXPERIMENTS"] = (
-                cls._previous_reid_flag
-            )
-
-    def test_public_default_hides_and_rejects_reid_experiments(self):
-        with patch.dict(
-            os.environ, {"KREA2_IDENTITY_ENABLE_REID_EXPERIMENTS": ""}
-        ):
-            model_def = self.handler.query_model_def("krea2_identity_turbo", {})
-            settings = {
-                item["id"]: item for item in model_def["custom_settings"]
-            }
-            self.assertNotIn(
-                "reid",
-                [
-                    value
-                    for _label, value in settings["identity_method"]["choices"]
-                ],
-            )
-            self.assertNotIn(
-                "I",
-                [
-                    value
-                    for _label, value in model_def["image_ref_choices"]["choices"]
-                ],
-            )
-            self.assertNotIn("VG", model_def["guide_preprocessing"]["selection"])
-            self.assertFalse(
-                any(
-                    item["repoId"] == "yijunwang2/krea2-reid"
-                    for item in self.handler.query_model_files(
-                        [], "krea2_identity_turbo", {}
-                    )
-                )
-            )
-            self.assertNotIn("## ReID identity method", model_def["prompt_infos"][1])
-            self.assertIn(
-                "disabled in this plugin build",
-                self.handler.validate_generative_settings(
-                    "krea2_identity_turbo",
-                    {},
-                    {"custom_settings": {"identity_method": "reid"}},
-                ),
-            )
+    def test_model_definition_exposes_supported_identity_routes(self):
+        model_def = self.handler.query_model_def("krea2_identity_turbo", {})
+        settings = {item["id"]: item for item in model_def["custom_settings"]}
+        self.assertEqual(
+            [value for _label, value in settings["identity_method"]["choices"]],
+            [
+                "identity_edit",
+                "identity_edit_ref2",
+                "identity_edit_ref4",
+                "identity_edit_ref8",
+                "identity_edit_ref4_scene2",
+                "identity_edit_ref8_scene2",
+                "depth_prompt",
+            ],
+        )
+        self.assertEqual(
+            model_def["guide_preprocessing"]["labels"]["VG"],
+            "Direct Image → Identity Edit",
+        )
 
     def test_identity_types_map_to_wangp_base_types(self):
         raw = self.handler.query_model_def("krea2_identity_raw", {})
@@ -118,25 +83,18 @@ class HandlerContractTests(unittest.TestCase):
         self.assertFalse(raw["at_least_one_image_ref_needed"])
         self.assertEqual(raw["video_guide_outpainting"], [1])
 
-    def test_encoder_stack_ab_choices_keep_full_bf16_as_default(self):
+    def test_unified_full_bf16_encoder_is_the_only_grounding_stack(self):
         definition = self.handler.query_model_def("krea2_identity_turbo", {})
-        self.assertEqual(len(definition["text_encoder_URLs"]), 2)
+        self.assertEqual(len(definition["text_encoder_URLs"]), 1)
         self.assertTrue(
             definition["text_encoder_URLs"][0].endswith(
                 "Qwen3-VL-4B-Instruct_bf16.safetensors"
             )
         )
-        self.assertIn("quanto", definition["text_encoder_URLs"][1].lower())
-
         files = self.handler.query_model_files([], "krea2_identity_turbo", {})
         self.assertEqual(files[0]["repoId"], "base")
-        legacy_vision = next(
-            item for item in files if item["repoId"] == "Comfy-Org/Krea-2"
-        )
-        self.assertEqual(legacy_vision["sourceFolderList"], ["text_encoders"])
-        self.assertEqual(
-            legacy_vision["fileList"],
-            [["qwen3vl_4b_fp8_scaled.safetensors"]],
+        self.assertFalse(
+            any(item["repoId"] == "Comfy-Org/Krea-2" for item in files)
         )
         sam3 = next(item for item in files if item["repoId"] == "DeepBeepMeep/Wan2.1")
         self.assertEqual(sam3["sourceFolderList"], ["sam3"])
@@ -144,20 +102,12 @@ class HandlerContractTests(unittest.TestCase):
             sam3["fileList"],
             [["sam3.1_multiplex_bf16.safetensors", "bpe_simple_vocab_16e6.txt.gz"]],
         )
-        yunet = next(item for item in files if item["repoId"] == "yijunwang2/krea2-reid")
-        self.assertEqual(yunet["sourceFolderList"], ["models"])
-        self.assertEqual(
-            yunet["fileList"],
-            [["face_detection_yunet_2023mar_int8.onnx"]],
-        )
         self.assertFalse(
             any(
                 item["repoId"] == "depth-anything/Depth-Anything-V2-Large-hf"
                 for item in files
             )
         )
-        raw_files = self.handler.query_model_files([], "krea2_identity_raw", {})
-        self.assertFalse(any(item["repoId"] == "yijunwang2/krea2-reid" for item in raw_files))
 
     def test_defaults_encode_effective_cfg_mapping(self):
         raw, turbo = {}, {}
@@ -167,16 +117,6 @@ class HandlerContractTests(unittest.TestCase):
         self.assertEqual((turbo["num_inference_steps"], turbo["guidance_scale"]), (8, 0))
         self.assertEqual(raw["custom_settings"]["identity_lora_variant"], "full_v1.2")
         self.assertEqual(turbo["custom_settings"]["identity_lora_variant"], "full_v1.2")
-        self.assertEqual(raw["custom_settings"]["reid_lora_strength"], 1.0)
-        self.assertEqual(turbo["custom_settings"]["reid_lora_strength"], 1.0)
-        self.assertEqual(
-            raw["custom_settings"]["reid_reference_method"],
-            "isolated_cache",
-        )
-        self.assertEqual(
-            turbo["custom_settings"]["reid_reference_method"],
-            "isolated_cache",
-        )
         self.assertEqual(raw["custom_settings"]["identity_method"], "identity_edit")
         self.assertEqual(turbo["custom_settings"]["identity_method"], "identity_edit")
         self.assertEqual(raw["denoising_strength"], 0.25)
@@ -203,97 +143,70 @@ class HandlerContractTests(unittest.TestCase):
         settings = {item["id"]: item for item in model_def["custom_settings"]}
         advanced = json.loads(settings["advanced_settings"]["default"])
         self.assertEqual(advanced["generation_process"], "standard")
+        self.assertIn("outpaint_prompt", advanced)
         self.assertEqual(len(model_def["custom_settings"]), 5)
         self.assertEqual(settings["advanced_settings"]["video_prompt_type"], "~")
 
-    def test_two_phase_mode_is_optional_and_reid_turbo_depth_only(self):
-        model_def = self.handler.query_model_def("krea2_identity_turbo", {})
-        settings = {item["id"]: item for item in model_def["custom_settings"]}
-        advanced = json.loads(settings["advanced_settings"]["default"])
-        self.assertEqual(advanced["generation_process"], "standard")
-        self.assertEqual(
-            [item["id"] for item in model_def["custom_settings"][:5]],
-            [
-                "identity_method",
-                "depth_control_strength",
-                "subject_background_removal",
-                "subject_segmentation_prompt",
-                "advanced_settings",
-            ],
+    def test_registered_outpaint_does_not_mutate_the_generation_prompt(self):
+        prompt = "A portrait of the existing person in the existing room."
+        processed = self.handler.custom_prompt_preprocess(
+            prompt,
+            video_guide_outpainting="0 0 0 100",
+            video_guide_outpainting_ratio="16:9",
+            model_mode=0,
         )
-        base = {
-            "video_prompt_type": "IDV",
-            "image_guide": object(),
-            "batch_size": 1,
+        self.assertEqual(processed, prompt)
+        self.assertNotIn("red paddings", processed)
+
+    def test_validation_preserves_ratio_mode_for_outpaint_geometry(self):
+        inputs = {
+            "video_prompt_type": "KI",
+            "image_refs": [object()],
+            "video_guide_outpainting": "0 0 0 100",
+            "video_guide_outpainting_ratio": "16:9",
             "custom_settings": {
-                "identity_method": "reid",
-                "generation_process": "two_phase_025_keep",
-                "depth_control_strength": 0.98,
+                "identity_method": "identity_edit",
+                "generation_process": "identity_then_outpaint",
             },
         }
         self.assertIsNone(
             self.handler.validate_generative_settings(
-                "krea2_identity_turbo", {}, dict(base)
+                "krea2_identity_turbo", {}, inputs
             )
         )
-        wrong_method = dict(base)
-        wrong_method["custom_settings"] = dict(base["custom_settings"])
-        wrong_method["custom_settings"]["identity_method"] = "identity_edit"
         self.assertEqual(
-            self.handler.validate_generative_settings(
-                "krea2_identity_turbo", {}, wrong_method
-            ),
-            "Two-phase Depth then ReID requires the ReID identity method.",
-        )
-        batch = dict(base)
-        batch["custom_settings"] = dict(base["custom_settings"])
-        batch["batch_size"] = 2
-        self.assertEqual(
-            self.handler.validate_generative_settings(
-                "krea2_identity_turbo", {}, batch
-            ),
-            "Two-phase Depth then ReID currently requires batch size 1.",
+            inputs["custom_settings"]["_registered_outpaint_ratio"],
+            "16:9",
         )
 
-    def test_reid_is_a_mutually_exclusive_turbo_single_reference_method(self):
-        model_def = self.handler.query_model_def("krea2_identity_turbo", {})
-        settings = {item["id"]: item for item in model_def["custom_settings"]}
-        method = settings["identity_method"]
-        self.assertEqual(method["default"], "identity_edit")
-        self.assertEqual(method["video_prompt_type"], "K")
-        self.assertEqual(
-            [value for _label, value in method["choices"]],
-            [
-                "identity_edit",
-                "identity_edit_ref2",
-                "identity_edit_ref4",
-                "identity_edit_ref8",
-                "identity_edit_ref4_scene2",
-                "identity_edit_ref8_scene2",
-                "reid",
-                "depth_prompt",
-            ],
+    def test_validation_records_conditional_output_metadata_context(self):
+        inputs = {
+            "video_prompt_type": "KIDV",
+            "image_guide": object(),
+            "image_refs": [object()],
+            "plugin_data": {"Unrelated Plugin Data": "Preserved"},
+            "custom_settings": {
+                "identity_method": "identity_edit",
+                "depth_control_strength": 1.0,
+                "builtin_adapter_timing": "simultaneous",
+            },
+        }
+        self.assertIsNone(
+            self.handler.validate_generative_settings(
+                "krea2_identity_turbo", {}, inputs
+            )
         )
         self.assertEqual(
-            self.handler.validate_generative_settings(
-                "krea2_identity_raw",
-                {},
-                {"custom_settings": {"identity_method": "reid"}},
-            ),
-            "Krea 2 ReID is supported only by the Turbo model definition.",
+            inputs["plugin_data"]["Unrelated Plugin Data"], "Preserved"
         )
         self.assertEqual(
-            self.handler.validate_generative_settings(
-                "krea2_identity_turbo",
-                {},
-                {
-                    "custom_settings": {
-                        "identity_method": "reid",
-                        "outpaint_mode": "outpaint_only",
-                    }
-                },
-            ),
-            "Krea 2 ReID cannot be combined with Registered Outpaint.",
+            inputs["plugin_data"]["krea2_identity_output_metadata"],
+            {
+                "identity_method": "identity_edit",
+                "depth_active": True,
+                "depth_mask_active": False,
+                "user_lora_count": 0,
+            },
         )
 
     def test_identity_reference_boost_profiles_keep_standard_and_reject_nag(self):
@@ -355,7 +268,7 @@ class HandlerContractTests(unittest.TestCase):
                 "selection": ["", "VG", "DV"],
                 "labels": {
                     "": "No Control Image",
-                    "VG": "Direct Image → ReID Edit",
+                    "VG": "Direct Image → Identity Edit",
                     "DV": "Transfer Depth",
                 },
                 "default": "",
@@ -431,13 +344,13 @@ class HandlerContractTests(unittest.TestCase):
         self.assertEqual(advanced["subject_attention_ramp_middle"], 2.0)
         self.assertEqual(advanced["subject_attention_ramp_final"], 8.0)
 
-    def test_direct_image_to_reid_uses_raw_control_and_native_denoising(self):
+    def test_direct_image_identity_edit_uses_raw_control_and_native_denoising(self):
         valid = {
-            "video_prompt_type": "IVG",
+            "video_prompt_type": "KIVG",
             "image_guide": object(),
             "denoising_strength": 0.25,
             "custom_settings": {
-                "identity_method": "reid",
+                "identity_method": "identity_edit",
                 "generation_process": "standard",
             },
         }
@@ -447,23 +360,20 @@ class HandlerContractTests(unittest.TestCase):
             )
         )
         wrong_method = dict(valid)
-        wrong_method["custom_settings"] = {
-            "identity_method": "identity_edit",
-            "generation_process": "standard",
-        }
+        wrong_method["custom_settings"] = {"identity_method": "depth_prompt"}
         self.assertEqual(
             self.handler.validate_generative_settings(
                 "krea2_identity_turbo", {}, wrong_method
             ),
-            "Direct Image → ReID Edit requires the ReID identity method.",
+            "Direct Image → Identity Edit requires an Identity Edit method.",
         )
         masked = dict(valid)
-        masked["video_prompt_type"] = "IVGA"
+        masked["video_prompt_type"] = "KIVGA"
         self.assertEqual(
             self.handler.validate_generative_settings(
                 "krea2_identity_turbo", {}, masked
             ),
-            "Direct Image → ReID Edit currently supports Whole Frame only.",
+            "Direct Image → Identity Edit currently supports Whole Frame only.",
         )
         missing = dict(valid)
         missing.pop("image_guide")
@@ -471,7 +381,7 @@ class HandlerContractTests(unittest.TestCase):
             self.handler.validate_generative_settings(
                 "krea2_identity_turbo", {}, missing
             ),
-            "Direct Image → ReID Edit requires a Control Image.",
+            "Direct Image → Identity Edit requires a Control Image.",
         )
 
     def test_hidden_krea_lanpaint_mode_cannot_reset_depth_strength(self):
@@ -495,7 +405,7 @@ class HandlerContractTests(unittest.TestCase):
         self.assertEqual(removal["default"], "off")
         self.assertEqual(
             [value for _label, value in removal["choices"]],
-            ["off", "reid_face_crop", "sam3", "stable"],
+            ["off", "sam3", "stable"],
         )
         self.assertEqual(settings["subject_segmentation_prompt"]["default"], "person")
         self.assertEqual(settings["subject_segmentation_prompt"]["type"], "text")
@@ -507,7 +417,6 @@ class HandlerContractTests(unittest.TestCase):
                         "Identity Edit — scene, then optional subject",
                         "KI",
                     ),
-                    ("ReID — one identity subject", "I"),
                     ("Depth + prompt only — no reference", ""),
                 ],
                 "letters_filter": "KI",
@@ -526,26 +435,6 @@ class HandlerContractTests(unittest.TestCase):
         self.assertEqual(
             defaults["custom_settings"]["subject_background_removal"], "stable"
         )
-
-    def test_reid_reference_is_not_resized_as_a_main_scene(self):
-        inputs = {
-            "video_prompt_type": "KIDV",
-            "image_guide": object(),
-            "custom_settings": {"identity_method": "reid"},
-        }
-        self.assertIsNone(
-            self.handler.validate_generative_settings(
-                "krea2_identity_turbo", {}, inputs
-            )
-        )
-        self.assertEqual(inputs["video_prompt_type"], "IDV")
-
-        defaults = {
-            "video_prompt_type": "KIDV",
-            "custom_settings": {"identity_method": "reid"},
-        }
-        self.handler.fix_settings("krea2_identity_turbo", 0, {}, defaults)
-        self.assertEqual(defaults["video_prompt_type"], "IDV")
 
     def test_identity_edit_reference_keeps_scene_first_mode(self):
         inputs = {
@@ -702,74 +591,6 @@ class HandlerContractTests(unittest.TestCase):
         self.assertFalse(calls[0][1]["alpha_matting"])
         self.assertIs(calls[0][1]["session"], session)
 
-    def test_reid_background_removal_targets_its_only_reference(self):
-        class FakeImage:
-            def convert(self, _mode):
-                return self
-
-        reference, cutout = FakeImage(), FakeImage()
-        rembg = types.ModuleType("rembg")
-        rembg.remove = lambda image, **_kwargs: cutout
-        shared_utils = types.ModuleType("shared.utils.utils")
-        shared_utils.new_rembg_session = lambda: object()
-        with patch.dict(
-            sys.modules,
-            {"rembg": rembg, "shared.utils.utils": shared_utils},
-        ):
-            output, _masks = self.module._postprocess_identity_references(
-                [reference], [None], 0, 0, None, "", None, "KI",
-                None, {},
-                {
-                    "identity_method": "reid",
-                    "subject_background_removal": "stable",
-                },
-            )
-        self.assertIs(output[0], cutout)
-
-    def test_reid_face_crop_uses_downloaded_yunet_asset(self):
-        class FakeImage:
-            pass
-
-        reference, cropped = FakeImage(), FakeImage()
-        result = types.SimpleNamespace(
-            image=cropped,
-            metadata={
-                "applied": True,
-                "confidence": 0.9,
-                "candidate_count": 1,
-                "original_size": (1280, 720),
-                "crop_bbox_original": [500, 100, 800, 400],
-                "output_size": (300, 300),
-            },
-        )
-        cropper = unittest.mock.MagicMock()
-        cropper.crop.return_value = result
-        cropper_class = unittest.mock.MagicMock(return_value=cropper)
-        crop_module = types.ModuleType("models.krea2_reid_face_crop")
-        crop_module.YuNetFaceCropper = cropper_class
-        locator_module = types.ModuleType("shared.utils.files_locator")
-        locator_module.locate_file = lambda *_args, **_kwargs: "yunet.onnx"
-        shared_utils = types.ModuleType("shared.utils")
-        shared_utils.files_locator = locator_module
-        with patch.dict(
-            sys.modules,
-            {
-                "models.krea2_reid_face_crop": crop_module,
-                "shared.utils": shared_utils,
-                "shared.utils.files_locator": locator_module,
-            },
-        ):
-            output, _masks = self.module._postprocess_identity_references(
-                [reference], [None], 0, 0, None, "", None, "I", None, {},
-                {
-                    "identity_method": "reid",
-                    "subject_background_removal": "reid_face_crop",
-                },
-            )
-        self.assertIs(output[0], cropped)
-        cropper_class.assert_called_once_with("yunet.onnx")
-        cropper.crop.assert_called_once_with(reference)
-
     def test_sam3_subject_removal_uses_semantic_phrase_and_preserves_scene(self):
         calls = []
 
@@ -864,7 +685,7 @@ class HandlerContractTests(unittest.TestCase):
     def test_custom_mask_mode_requires_upload_and_rejects_painted_route(self):
         common = {
             "image_guide": object(),
-            "custom_settings": {"identity_method": "reid"},
+            "custom_settings": {"identity_method": "identity_edit"},
         }
         missing = dict(common, video_prompt_type="IDVY")
         self.assertEqual(
@@ -891,10 +712,10 @@ class HandlerContractTests(unittest.TestCase):
         defaults = {
             "video_prompt_type": "IDVNA",
             "custom_guide": "mask.png",
-            "custom_settings": {"identity_method": "reid"},
+            "custom_settings": {"identity_method": "identity_edit"},
         }
         self.handler.fix_settings("krea2_identity_turbo", 0, {}, defaults)
-        self.assertEqual(defaults["video_prompt_type"], "IDVNY")
+        self.assertEqual(defaults["video_prompt_type"], "KIDVNY")
 
     def test_dedicated_depth_strength_is_preserved_and_native_guide_flag_removed(self):
         defaults = {

@@ -42,7 +42,6 @@ def main() -> int:
         "models/krea2_identity_handler.py",
         "models/krea2_advanced_settings.py",
         "models/krea2_depth_preview.py",
-        "models/krea2_identity_features.py",
         "models/krea2_identity_main.py",
         "models/krea2_identity_prompt.py",
         "models/krea2_identity_utils.py",
@@ -73,8 +72,8 @@ def main() -> int:
             fail(f"invalid architecture in {path.relative_to(ROOT)}")
         if architecture in architectures:
             fail(f"duplicate architecture: {architecture}")
-        if model.get("visible") is not True:
-            fail(f"experimental preview model must remain visible: {path.relative_to(ROOT)}")
+        if model.get("visible") is not False:
+            fail(f"pre-acceptance model must remain hidden: {path.relative_to(ROOT)}")
         architectures.add(architecture)
 
     for path in sorted(ROOT.rglob("*.py")):

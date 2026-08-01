@@ -1,9 +1,9 @@
 # GPU acceptance record
 
-The `2.0.0-beta.1` public beta exposes the model definitions so testers can
-exercise the implementation. A stable `2.0.0` release still requires all rows
-below to pass in a clean, explicitly designated WanGP installation. Do not use
-a personal or production WanGP instance for these tests.
+The implementation is ready for code review, but the model definitions remain
+hidden and GPU validation is pending. A stable `2.0.0` release still requires
+all rows below to pass in a clean, explicitly designated WanGP installation.
+Do not use a personal or production WanGP instance for these tests.
 
 ## Compatibility target
 
@@ -25,12 +25,11 @@ For every inference run record:
 - output resolution and reference count;
 - model variant (Raw/Turbo);
 - Identity Edit LoRA variant (v1.2 full/r128/r64);
-- Qwen3-VL encoder stack (unified full BF16 by default, or the temporary legacy
-  Quanto-language/scaled-FP8-vision regression option);
+- Qwen3-VL unified full-BF16 encoder checkpoint;
 - identity method and, for Identity Edit, the subject/scene reference-fidelity
-  profile; for ReID, rank-32 adapter/reference crop details;
-- for Direct Image to ReID, record the raw Control Image hash, denoising
-  strength, processed source dimensions and effective ReID step count;
+  profile;
+- for Direct Image to Identity Edit, record the raw Control Image hash,
+  denoising strength, processed source dimensions and effective step count;
 - for Depth + Prompt, confirm zero references and that only the depth adapter
   was loaded;
 - depth dropdown/area selection, control-image and mask fixture/hash, mask
@@ -71,15 +70,10 @@ their approved hashes/URLs.
 | Turbo, outside-mask depth | Pending | Painted subject is free while surrounding depth structure holds |
 | Depth mask feather 0 vs 16 vs 64 | Pending | Increasing feather softens the control boundary without changing mask polarity |
 | Turbo, scene plus isolated subject reference | Pending | Scene remains intact; only reference 2 has its background removed |
-| Turbo ReID, one close identity reference, 8 steps | Pending | ReID adapter loads alone; identity and requested output aspect hold |
-| Turbo ReID, full identity reference, 8 steps | Pending | 384² Qwen and clean-VAE budgets plus isolated K/V cache complete without retained state |
-| Turbo ReID LoRA strength 0 vs 1, same seed | Pending | Reference/cache fingerprints match while output changes only if the registered adapter contributes |
-| Turbo ReID plus depth control | Pending | Face identity and target pose both respond; depth affects target only |
-| ReID cancellation and switch away | Pending | Cached reference K/V and depth state are cleared |
-| Turbo ReID plus Direct Image, denoise 0.15 | Pending | Source composition is closely preserved and no depth adapter loads |
-| Turbo ReID plus Direct Image, denoise 0.25 | Pending | Identity changes while source pose, framing and background remain recognizable |
-| Turbo ReID plus Direct Image, denoise 0.35 | Pending | Stronger edit remains source-guided without stale control state |
-| Direct Image cancellation and switch away | Pending | Source tensor and ReID cache are released cleanly |
+| Turbo Identity Edit plus Direct Image, denoise 0.15 | Pending | Source composition is closely preserved and no depth adapter loads |
+| Turbo Identity Edit plus Direct Image, denoise 0.25 | Pending | Identity changes while source pose, framing and background remain recognizable |
+| Turbo Identity Edit plus Direct Image, denoise 0.35 | Pending | Stronger edit remains source-guided without stale control state |
+| Direct Image cancellation and switch away | Pending | Source tensor and identity reference state are released cleanly |
 | Turbo, Depth + Prompt only, whole frame | Pending | Zero references; only depth adapter loads; prompt and pose both respond |
 | Raw, Depth + Prompt only, CFG | Pending | Text-only positive/negative passes share the same depth control |
 | Depth + Prompt masked control and cancellation | Pending | Mask gates depth and all temporary depth/text-only state is restored |
@@ -92,12 +86,12 @@ their approved hashes/URLs.
 - Memory profile and attention mode: pending tester run.
 - Resolution: begin with `1280x720`; pending tester run.
 - Model variant: Krea 2 Identity Turbo.
-- Functional adapter: ReID rank 32; Identity Edit LoRA variant not applicable.
+- Functional adapter: Identity Edit v1.2 full initially; rank variants pending.
 - Text encoder: full BF16 Qwen3-VL.
 - Peak VRAM and wall time: pending tester run.
-- Observed result: static handler/runtime contracts and 77 unit tests pass; GPU
+- Observed result: static handler/runtime contracts and 130 unit tests pass; GPU
   image behavior is pending. The terminal must show
-  `[Krea2 Identity][Direct Image] ReID refinement` and must not report loading
+  `[Krea2 Identity][Direct Image] Identity Edit refinement` and must not report loading
   `depth-control-lora.safetensors`.
 
 ## Reference-fidelity implementation record
@@ -114,32 +108,10 @@ their approved hashes/URLs.
   and two-reference subject 4x + scene 2x.
 - Peak VRAM and wall time: pending tester run. The additive attention bias is
   dense, so compare memory against the 1x/1x path and begin at 1280x720.
-- Observed result: scaffold validation and 92 unit tests pass; GPU image
+- Observed result: scaffold validation and 130 unit tests pass; GPU image
   behavior is pending. A boosted run must log
   `[Krea2 Identity][Identity Edit] reference attention boost active` with the
   selected subject and scene multipliers. NAG scale must remain 1.0.
-
-## ReID reference-budget diagnostic record
-
-- WanGP revision: v12.34 / audited commit
-  `6b92c54f92bde24d6d309d6f61249353b0ec783d`.
-- GPU: 12 GB VRAM; exact model and driver pending tester record.
-- Memory profile and attention mode: pending tester record.
-- Resolution and model: `1280x720`, Krea 2 Identity Turbo.
-- Functional adapter: ReID rank 32; unified BF16 Qwen3-VL encoder.
-- Peak VRAM: not captured. The 1024² diagnostic clean-reference cache used
-  more memory and time than the published 384² path.
-- Pre-correction observation: with the same seed and prompt, face-crop on and
-  off produced 572/576 cached identity tokens and converged on a similar
-  generic identity. The local runtime had incorrectly reused Qwen's 384²
-  budget for the clean VAE reference.
-- Diagnostic result: the aligned `1296x704` reference logged 3,564 clean VAE
-  tokens instead of 576, but still converged on essentially the same generic
-  identity. Reference-token resolution is therefore not the primary fault.
-- Restored contract: both Qwen and clean VAE reference preparation use the
-  author's tested 384² budgets. The next diagnostic is a same-seed ReID LoRA
-  strength A/B at 0.0 versus 1.0; all reference encoding and cache inputs must
-  remain unchanged between those runs.
 
 ## Resolution sweep
 
@@ -153,6 +125,6 @@ Only after the matrix passes:
 
 1. add validated profile JSON files beneath `profiles/krea2_identity/`;
 2. add permitted screenshots;
-3. confirm both model definitions remain `visible: true`;
+3. change both model definitions from `visible: false` to `visible: true`;
 4. validate a fresh GitHub-URL installation;
 5. change the beta version to `2.0.0` and tag `v2.0.0`.

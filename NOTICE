@@ -35,14 +35,3 @@ from Krea 2 Registered Outpaint:
 
 The rank-32 adapter is governed by the Krea 2 Community License Agreement. This
 integration is unofficial and is not endorsed by Krea or Ostris.
-
-Krea 2 ReID isolated reference conditioning independently adapts the published
-Apache-2.0 pipeline contract from:
-
-  Krea 2 ReID / Krea2OstrisEdit pipeline
-  Pipeline copyright 2026 Ostris, LLC
-  https://huggingface.co/yijunwang2/krea2-reid
-
-The ReID rank-32 adapter is governed by the Krea 2 Community License Agreement.
-No model weights or optional YuNet face detector are bundled. This integration
-is unofficial and is not endorsed by Krea or Ostris.

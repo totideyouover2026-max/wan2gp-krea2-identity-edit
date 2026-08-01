@@ -20,24 +20,28 @@ from .krea2_identity_utils import (
     validate_depth_user_lora_timing,
     validate_grounding_px,
     validate_identity_lora_variant,
-    validate_reid_lora_strength,
     validate_subject_attention_ramp,
     validate_subject_attention_timing,
 )
 
 
 ADVANCED_SETTINGS_ID = "advanced_settings"
+OUTPUT_METADATA_CONTEXT_KEY = "krea2_identity_output_metadata"
+DEFAULT_OUTPAINT_PROMPT = (
+    "Seamlessly continue the existing image into the expanded canvas. Preserve "
+    "the same scene, subject count, composition, perspective, lighting, color "
+    "palette, textures, and visual style. Do not add new subjects, objects, "
+    "text, logos, or unrelated details."
+)
 _IDENTITY_LORA_VARIANT_SCHEMA_KEY = "identity_lora_variant_schema"
 _IDENTITY_LORA_VARIANT_SCHEMA_VERSION = "v1.2"
 ADVANCED_SETTING_KEYS = (
     "generation_process",
+    "outpaint_prompt",
     "grounding_px",
     "output_resolution_limit",
     "identity_lora_variant",
     _IDENTITY_LORA_VARIANT_SCHEMA_KEY,
-    "reid_lora_strength",
-    "reid_reference_method",
-    "secondary_reference_geometry",
     "subject_attention_timing",
     "subject_attention_ramp_early",
     "subject_attention_ramp_middle",
@@ -57,13 +61,11 @@ ADVANCED_SETTING_KEYS = (
 )
 ADVANCED_SETTINGS_DEFAULTS = {
     "generation_process": "standard",
+    "outpaint_prompt": DEFAULT_OUTPAINT_PROMPT,
     "grounding_px": 768,
     "output_resolution_limit": "safe_2mp",
     "identity_lora_variant": "full_v1.2",
     _IDENTITY_LORA_VARIANT_SCHEMA_KEY: _IDENTITY_LORA_VARIANT_SCHEMA_VERSION,
-    "reid_lora_strength": 1.0,
-    "reid_reference_method": "isolated_cache",
-    "secondary_reference_geometry": "fit",
     "subject_attention_timing": "constant",
     "subject_attention_ramp_early": 1.0,
     "subject_attention_ramp_middle": 2.0,
@@ -81,6 +83,31 @@ ADVANCED_SETTINGS_DEFAULTS = {
     "builtin_identity_ramp_middle": 0.75,
     "builtin_identity_ramp_final": 1.0,
 }
+ADVANCED_METADATA_LABELS = frozenset(
+    {
+        "Generation Process",
+        "Registered Outpaint Prompt",
+        "Identity Edit LoRA Variant",
+        "Reference Grounding Budget",
+        "Output Resolution Limit",
+        "Subject Attention Timing",
+        "Subject Attention Ramp — Early",
+        "Subject Attention Ramp — Middle",
+        "Subject Attention Ramp — Final",
+        "Builtin Adapter Timing",
+        "Builtin Depth Ramp — Early",
+        "Builtin Depth Ramp — Middle",
+        "Builtin Depth Ramp — Final",
+        "Builtin Identity Edit Ramp — Early",
+        "Builtin Identity Edit Ramp — Middle",
+        "Builtin Identity Edit Ramp — Final",
+        "Depth Mask Feather",
+        "Additional LoRA Timing With Depth",
+        "Additional LoRA Ramp — Early",
+        "Additional LoRA Ramp — Middle",
+        "Additional LoRA Ramp — Final",
+    }
+)
 
 
 def _decode_payload(raw_value) -> dict:
@@ -120,7 +147,7 @@ def normalize_advanced_settings(raw_value=None, legacy_settings=None) -> dict:
         }
     )
 
-    # Preserve migration from the older individual two-phase/outpaint fields.
+    # Preserve migration from older individual process/outpaint fields.
     if "generation_process" in payload:
         process_source = {"generation_process": payload["generation_process"]}
     elif "generation_process" in legacy:
@@ -128,6 +155,11 @@ def normalize_advanced_settings(raw_value=None, legacy_settings=None) -> dict:
     else:
         process_source = legacy
     values["generation_process"] = migrate_generation_process(process_source)
+    values["outpaint_prompt"] = str(values["outpaint_prompt"] or "").strip()
+    if not values["outpaint_prompt"]:
+        values["outpaint_prompt"] = DEFAULT_OUTPAINT_PROMPT
+    if len(values["outpaint_prompt"]) > 2000:
+        raise ValueError("outpaint_prompt must be 2000 characters or fewer")
     values["grounding_px"] = validate_grounding_px(values["grounding_px"])
     if values["output_resolution_limit"] not in {"safe_2mp", "unlimited"}:
         raise ValueError(
@@ -149,21 +181,6 @@ def normalize_advanced_settings(raw_value=None, legacy_settings=None) -> dict:
     values[_IDENTITY_LORA_VARIANT_SCHEMA_KEY] = (
         _IDENTITY_LORA_VARIANT_SCHEMA_VERSION
     )
-    values["reid_lora_strength"] = validate_reid_lora_strength(
-        values["reid_lora_strength"]
-    )
-    if values["reid_reference_method"] not in {
-        "joint_timestep_zero",
-        "isolated_cache",
-    }:
-        raise ValueError(
-            "reid_reference_method must be 'joint_timestep_zero' or "
-            "'isolated_cache'"
-        )
-    if values["secondary_reference_geometry"] not in {"fit", "stretch"}:
-        raise ValueError(
-            "secondary_reference_geometry must be 'fit' or 'stretch'"
-        )
     values["subject_attention_timing"] = validate_subject_attention_timing(
         values["subject_attention_timing"]
     )
@@ -236,3 +253,101 @@ def expand_advanced_settings(settings) -> dict:
     expanded.update(normalized)
     expanded[ADVANCED_SETTINGS_ID] = encode_advanced_settings(normalized)
     return expanded
+
+
+def _display_number(value) -> str:
+    number = float(value)
+    return f"{number:.2f}".rstrip("0").rstrip(".")
+
+
+def advanced_settings_metadata(
+    settings,
+    *,
+    identity_method: str,
+    depth_active: bool = False,
+    depth_mask_active: bool = False,
+    user_lora_count: int = 0,
+) -> dict[str, str]:
+    """Return output-info rows only for advanced settings used by this run."""
+
+    packed = (
+        settings.get(ADVANCED_SETTINGS_ID)
+        if isinstance(settings, Mapping)
+        else settings
+    )
+    values = normalize_advanced_settings(packed, settings)
+    process = values["generation_process"]
+    identity_edit_active = (
+        identity_method == "identity_edit" and process != "outpaint_only"
+    )
+    process_labels = {
+        "standard": "Standard Single Pass",
+        "outpaint_only": "Registered Outpaint Only",
+        "identity_then_outpaint": "Identity Edit, Then Registered Outpaint",
+    }
+    rows = {
+        "Generation Process": process_labels.get(process, process),
+    }
+    if process in {"outpaint_only", "identity_then_outpaint"}:
+        rows["Registered Outpaint Prompt"] = values["outpaint_prompt"]
+
+    if identity_edit_active:
+        identity_lora_labels = {
+            "full_v1.2": "v1.2 Full",
+            "r128": "v1.2 Rank 128",
+            "r64": "v1.2 Rank 64",
+        }
+        rows["Identity Edit LoRA Variant"] = identity_lora_labels[
+            values["identity_lora_variant"]
+        ]
+        rows["Reference Grounding Budget"] = f"{values['grounding_px']} px"
+        rows["Output Resolution Limit"] = (
+            "Safe 2 MP"
+            if values["output_resolution_limit"] == "safe_2mp"
+            else "Full Selected Resolution"
+        )
+        subject_timing = values["subject_attention_timing"]
+        rows["Subject Attention Timing"] = (
+            "Constant Selected Fidelity"
+            if subject_timing == "constant"
+            else "Ramp Over Denoising Thirds"
+        )
+        if subject_timing == "ramp":
+            for stage in ("early", "middle", "final"):
+                rows[f"Subject Attention Ramp — {stage.title()}"] = (
+                    f"{_display_number(values[f'subject_attention_ramp_{stage}'])}x"
+                )
+
+    standard_depth_pass = depth_active and process == "standard"
+    if identity_edit_active and standard_depth_pass:
+        builtin_timing = values["builtin_adapter_timing"]
+        rows["Builtin Adapter Timing"] = (
+            "Simultaneous"
+            if builtin_timing == "simultaneous"
+            else "Depth Layout → Identity Refinement"
+        )
+        if builtin_timing == "depth_then_identity":
+            for adapter in ("depth", "identity"):
+                label = "Depth" if adapter == "depth" else "Identity Edit"
+                for stage in ("early", "middle", "final"):
+                    rows[f"Builtin {label} Ramp — {stage.title()}"] = (
+                        _display_number(
+                            values[f"builtin_{adapter}_ramp_{stage}"]
+                        )
+                    )
+
+    if depth_mask_active:
+        rows["Depth Mask Feather"] = f"{values['depth_mask_feather_px']} px"
+
+    if standard_depth_pass and user_lora_count > 0:
+        user_timing = values["depth_user_lora_timing"]
+        rows["Additional LoRA Timing With Depth"] = (
+            "Depth First" if user_timing == "depth_first" else "All Steps"
+        )
+        if user_timing == "depth_first":
+            for stage in ("early", "middle", "final"):
+                rows[f"Additional LoRA Ramp — {stage.title()}"] = (
+                    _display_number(values[f"depth_user_lora_ramp_{stage}"])
+                )
+
+    return rows

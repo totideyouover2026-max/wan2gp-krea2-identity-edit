@@ -30,16 +30,11 @@ ASSETS = {
         "https://huggingface.co/Patil/Krea-2-depth-controlnet/resolve/main/"
         "depth-control-lora.safetensors"
     ),
-    "reid": (
-        "https://huggingface.co/yijunwang2/krea2-reid/resolve/main/"
-        "krea2_reid_rank32.safetensors"
-    ),
 }
 EXPECTED_RANKS = {
     "v1.2_full": 256,
     "v1.2_r128": 128,
     "v1.2_r64": 64,
-    "reid": 32,
 }
 LORA_MODULE = re.compile(
     r"^diffusion_model\."

@@ -16,8 +16,8 @@
 - [x] Reuse WanGP's complete BF16 Qwen3-VL 4B checkpoint containing both language and visual weights as the default.
 - [x] Reuse WanGP tokenizer/preprocessor assets and construct the image processor from the published config.
 - [x] Implement MMGP/offload-aware full BF16 language and visual model loading.
-- [x] Add a temporary load-time encoder-stack A/B: unified BF16 by default, or
-  the former Quanto-language plus Comfy scaled-FP8-vision stack.
+- [x] Standardize on the unified BF16 language-and-vision checkpoint and remove
+  the obsolete split encoder regression path.
 - [x] Implement Identity Edit v1.2 LoRA selection: full (default), r128 and r64.
 - [x] Add and unit-test LoRA key conversion for WanGP's Krea 2 transformer names; real loading remains an acceptance item.
 
@@ -28,8 +28,8 @@
 - [x] Preserve the 12 selected Krea 2 text-encoder hidden layers.
 - [x] VAE-encode clean source/reference latents.
 - [x] Preserve secondary-reference aspect ratio and centre its aligned latent grid.
-- [x] Add a temporary FIT-versus-legacy-stretch selector for Picture 2 geometry
-  regression testing without changing the default FIT path.
+- [x] Remove the temporary legacy-stretch diagnostic after verifying the FIT
+  path; Picture 2 now always preserves its aspect ratio.
 - [x] Pack source and target latent patches consistently.
 - [x] Build `[text | source(s) | target]` sequence positions.
 - [x] Assign reference RoPE frames 1..N and target frame 0.
@@ -52,6 +52,8 @@
 - [x] Add an adaptive four-control main layout plus a Yes/No Advanced Settings
   launcher backed by a plugin-owned modal and a hidden canonical JSON carrier.
 - [x] Migrate legacy flat advanced settings before validation and inference.
+- [x] Render active advanced settings as conditional, human-readable output
+  metadata rows while preserving lossless settings import.
 - [x] Add optional Identity Edit subject-attention timing with validated
   early/middle/final denoising-third boosts and constant compatibility default.
 - [x] Remove the temporary single-reference KI/native-I role selector and
@@ -81,30 +83,13 @@
   full-pass Identity Edit and depth conditioning.
 - [x] Expose validated early/middle/final depth-first ramp multipliers in the
   plugin-owned Advanced Settings modal.
-- [x] Add a mutually exclusive Turbo ReID rank-32 method with one reference.
-- [x] Add ReID's shared aspect-preserving 384²-area Qwen/clean-VAE reference,
-  frame-1 positions, released isolated timestep-zero K/V cache, fixed 8-step
-  sampling and optional target-only depth control.
-- [x] Retain the experimental joint timestep-zero stream behind an Advanced
-  Settings selector for same-seed reference-injection A/B tests.
-- [x] Add sampled isolated-cache fingerprints and RMS diagnostics for adapter
-  strength A/B tests.
-- [x] Add a diagnostic 0..2 ReID LoRA multiplier so a same-seed 0-versus-1
-  run can isolate adapter contribution without changing reference conditioning.
-- [x] Add the ReID release's optional YuNet face/head crop with separately
-  downloaded detector weights and a full-reference fallback.
 - [x] Add reference-free Depth + Prompt generation with only the depth adapter
   and text conditioning.
-- [x] Add an opt-in Turbo/ReID two-phase experiment: Depth + Prompt first, then
-  a low-denoise source-image ReID refinement with independently scheduled user
-  LoRAs and optional phase-2 depth.
-- [x] Add an opt-in raw Control Image to ReID route using WanGP's native `VG`
-  preprocessing and low-denoise source-image restart.
-- [ ] Run Direct Image to ReID GPU comparisons at denoising strengths
+- [x] Add an opt-in raw Control Image to Identity Edit route using WanGP's native
+  `VG` preprocessing and low-denoise source-image restart while retaining the
+  normal Identity Edit reference stream.
+- [ ] Run Direct Image to Identity Edit GPU comparisons at denoising strengths
   0.15/0.25/0.35 and confirm the uploaded source is not depth-preprocessed.
-- [ ] Run two-phase GPU comparisons across phase-2 denoise 0.15/0.25/0.35,
-  phase-2 depth on/off, and Unlocker strengths 0.01/0.5/1.0.
-- [ ] Run ReID identity, pose-angle and ReID + depth GPU golden tests.
 - [ ] Run masked-depth and isolated-subject GPU golden tests.
 - [ ] Run combined Identity Edit + depth golden tests on Raw and Turbo.
 - [ ] Run a same-seed simultaneous versus Depth layout -> Identity refinement
@@ -131,8 +116,14 @@
 - [x] Add registered spatial outpaint geometry and protected-source compositing.
 - [x] Add isolated registered-reference K/V conditioning.
 - [x] Add outpaint-only and separately scheduled Identity + Outpaint tasks.
+- [x] Resolve ratio-mode direction sliders against the real source/canvas
+  geometry and cover left, right, top and bottom placement with unit tests.
+- [x] Isolate a dedicated conservative outpaint prompt and negative prompt from
+  the main generation pass, including disabling the inherited padding prompt.
 - [ ] Run Turbo/Raw Registered Outpaint GPU golden tests and record peak VRAM.
-- [ ] Validate one-pass edge placements before adding interior two-pass placement.
+- [ ] GPU-validate all one-pass edge placements and prompt isolation.
+- [ ] Add interior placement as two registered passes before accepting manual
+  margins that mix horizontal and vertical expansion.
 
 - [x] Select a license for original plugin code.
 - [x] Complete third-party notices and preserve adapted-code attribution.

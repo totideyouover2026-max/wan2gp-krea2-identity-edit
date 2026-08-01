@@ -13,11 +13,16 @@ import gradio as gr
 from shared.utils.plugins import WAN2GPPlugin  # pyright: ignore[reportMissingImports]
 
 from .models.krea2_advanced_settings import (
+    ADVANCED_METADATA_LABELS,
+    ADVANCED_SETTING_KEYS,
+    ADVANCED_SETTINGS_ID,
     ADVANCED_SETTINGS_DEFAULTS,
+    OUTPUT_METADATA_CONTEXT_KEY,
+    advanced_settings_metadata,
     encode_advanced_settings,
+    expand_advanced_settings,
     normalize_advanced_settings,
 )
-from .models.krea2_identity_features import reid_experiments_enabled
 from .models.krea2_depth_preview import (
     build_masked_control_preview,
     generate_effective_depth_preview,
@@ -29,8 +34,6 @@ from .models.krea2_input_metadata import (
 
 
 _MODEL_TYPES = {"krea2_identity_raw", "krea2_identity_turbo"}
-_REID_EXPERIMENTS_ENABLED = reid_experiments_enabled()
-
 _IDENTITY_EDIT_METHOD_CHOICES = [
     ("Identity Edit — standard fidelity (1x / 1x)", "identity_edit"),
     ("Identity Edit — subject fidelity 2x", "identity_edit_ref2"),
@@ -47,25 +50,11 @@ _IDENTITY_EDIT_METHOD_CHOICES = [
 _ALL_IDENTITY_METHOD_CHOICES = _IDENTITY_EDIT_METHOD_CHOICES + [
     ("Depth + prompt only (selected by reference mode)", "depth_prompt"),
 ]
-if _REID_EXPERIMENTS_ENABLED:
-    _ALL_IDENTITY_METHOD_CHOICES.insert(
-        len(_IDENTITY_EDIT_METHOD_CHOICES),
-        ("ReID (selected by reference mode)", "reid"),
-    )
-
 _GENERATION_PROCESS_CHOICES = [
     ("Standard single pass (recommended)", "standard"),
     ("Registered Outpaint only", "outpaint_only"),
     ("Identity edit, then Registered Outpaint", "identity_then_outpaint"),
 ]
-if _REID_EXPERIMENTS_ENABLED:
-    _GENERATION_PROCESS_CHOICES[1:1] = [
-        ("Two phase: depth, then ReID — light refinement", "two_phase_015_keep"),
-        ("Two phase: depth, then ReID — balanced refinement", "two_phase_025_keep"),
-        ("Two phase: depth, then ReID — stronger refinement", "two_phase_035_keep"),
-        ("Two phase: depth, then ReID — balanced, depth off in phase 2", "two_phase_025_off"),
-    ]
-
 _IDENTITY_LORA_VARIANTS = [
     ("v1.2 Full — 1.83 GB (recommended)", "full_v1.2"),
     ("v1.2 Rank 128 — 0.91 GB", "r128"),
@@ -247,10 +236,8 @@ def _plugin_active(state) -> bool:
 
 def _reference_mode(video_prompt_type) -> str:
     prompt_type = str(video_prompt_type or "")
-    if "K" in prompt_type:
+    if "K" in prompt_type or "I" in prompt_type:
         return "identity_edit"
-    if "I" in prompt_type:
-        return "reid" if _REID_EXPERIMENTS_ENABLED else "disabled_reid"
     return "depth_prompt"
 
 
@@ -259,12 +246,6 @@ def _synchronized_identity_method(identity_method, video_prompt_type) -> str:
     current = str(identity_method or "")
     if mode == "identity_edit":
         return current if current.startswith("identity_edit") else "identity_edit"
-    if mode == "disabled_reid":
-        # Other WanGP models may use the generic ``I`` reference-mode letter.
-        # When this plugin's experimental ReID path is disabled, never copy an
-        # internal sentinel into the shared dropdown: Gradio validates hidden
-        # component values too, and the sentinel is intentionally not a choice.
-        return "identity_edit"
     return mode
 
 
@@ -273,6 +254,82 @@ def _safe_advanced_values(payload):
         return normalize_advanced_settings(payload)
     except ValueError:
         return dict(ADVANCED_SETTINGS_DEFAULTS)
+
+
+def _prepare_output_metadata(configs, *, plugin_data=None, model_type=None):
+    """Render active rows and hide the packed carrier without losing settings."""
+
+    if model_type not in _MODEL_TYPES or not isinstance(configs, dict):
+        return configs
+    custom_settings = configs.get("custom_settings")
+    if not isinstance(custom_settings, dict):
+        return configs
+    try:
+        expanded = expand_advanced_settings(custom_settings)
+    except ValueError:
+        return configs
+
+    cleaned_configs = dict(configs)
+    cleaned_settings = dict(custom_settings)
+    for key in ADVANCED_SETTING_KEYS:
+        cleaned_settings[key] = expanded[key]
+    cleaned_settings.pop(ADVANCED_SETTINGS_ID, None)
+    cleaned_settings.pop("_registered_outpaint_ratio", None)
+    cleaned_configs["custom_settings"] = cleaned_settings
+
+    context = (
+        plugin_data.get(OUTPUT_METADATA_CONTEXT_KEY, {})
+        if isinstance(plugin_data, dict)
+        else {}
+    )
+    context = context if isinstance(context, dict) else {}
+    identity_method = str(
+        context.get("identity_method")
+        or cleaned_settings.get("identity_method")
+        or "identity_edit"
+    )
+    if identity_method.startswith("identity_edit"):
+        identity_method = "identity_edit"
+    prompt_type = str(cleaned_configs.get("video_prompt_type", "") or "")
+    depth_strength = float(cleaned_settings.get("depth_control_strength", 1.0))
+    depth_active = bool(
+        context.get(
+            "depth_active",
+            "D" in prompt_type and "V" in prompt_type and depth_strength > 0,
+        )
+    )
+    depth_mask_active = bool(
+        context.get(
+            "depth_mask_active",
+            depth_active and any(flag in prompt_type for flag in ("A", "Y")),
+        )
+    )
+    activated_loras = cleaned_configs.get("activated_loras")
+    inferred_user_loras = (
+        len(activated_loras)
+        if isinstance(activated_loras, (list, tuple))
+        else int(bool(activated_loras))
+    )
+    metadata_rows = advanced_settings_metadata(
+        expanded,
+        identity_method=identity_method,
+        depth_active=depth_active,
+        depth_mask_active=depth_mask_active,
+        user_lora_count=int(
+            context.get("user_lora_count", inferred_user_loras) or 0
+        ),
+    )
+    existing_extra_info = cleaned_configs.get("extra_info")
+    extra_info = (
+        dict(existing_extra_info)
+        if isinstance(existing_extra_info, dict)
+        else {}
+    )
+    for label in ADVANCED_METADATA_LABELS:
+        extra_info.pop(label, None)
+    extra_info.update(metadata_rows)
+    cleaned_configs["extra_info"] = extra_info
+    return cleaned_configs
 
 
 def _custom_mask_mode(video_prompt_type) -> bool:
@@ -316,7 +373,7 @@ def _refresh_context_controls(state, method, preparation, prompt_type):
     if not _plugin_active(state):
         return gr.update(), gr.update(), gr.update()
     mode = _reference_mode(prompt_type)
-    reference_visible = mode in {"identity_edit", "reid"}
+    reference_visible = mode == "identity_edit"
     return (
         gr.update(
             visible=mode == "identity_edit",
@@ -332,7 +389,7 @@ def _refresh_segmentation_phrase(state, preparation, prompt_type):
     if not _plugin_active(state):
         return gr.update()
     visible = (
-        _reference_mode(prompt_type) in {"identity_edit", "reid"}
+        _reference_mode(prompt_type) == "identity_edit"
         and preparation == "sam3"
     )
     return gr.update(visible=visible)
@@ -342,6 +399,7 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
     """Adds adaptive visibility and a modal editor to the model form."""
 
     def setup_ui(self):
+        self.register_data_hook("before_metadata_save", _prepare_output_metadata)
         for component_id in (
             "state",
             "refresh_form_trigger",
@@ -375,10 +433,7 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
 
         initial_active = _plugin_active(self.state.value)
         initial_mode = _reference_mode(self.video_prompt_type.value)
-        initial_reference_visible = initial_active and initial_mode in {
-            "identity_edit",
-            "reid",
-        }
+        initial_reference_visible = initial_active and initial_mode == "identity_edit"
         control_base_label = "Control Image"
         references_base_label = "Reference Images"
         if initial_active:
@@ -664,51 +719,27 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
                                         label="Generation process / additional task",
                                         info=(
                                             "Standard is the existing single-pass workflow. "
-                                            "Two-phase and outpaint modes are experimental."
+                                            "Registered Outpaint modes are experimental."
+                                        ),
+                                    )
+                                    outpaint_prompt = gr.Textbox(
+                                        value=ADVANCED_SETTINGS_DEFAULTS[
+                                            "outpaint_prompt"
+                                        ],
+                                        lines=4,
+                                        label="Registered Outpaint prompt",
+                                        info=(
+                                            "Used only by the Registered Outpaint pass. "
+                                            "Describe a conservative continuation of the "
+                                            "complete image; the main generation prompt is "
+                                            "not reused."
                                         ),
                                     )
                                     identity_lora_variant = gr.Dropdown(
                                         choices=_IDENTITY_LORA_VARIANTS,
                                         value=ADVANCED_SETTINGS_DEFAULTS["identity_lora_variant"],
                                         label="Identity Edit LoRA variant",
-                                        info="Used by Identity Edit modes; ReID uses its own fixed LoRA.",
-                                    )
-                                    reid_lora_strength = gr.Slider(
-                                        minimum=0,
-                                        maximum=2,
-                                        step=0.05,
-                                        value=ADVANCED_SETTINGS_DEFAULTS[
-                                            "reid_lora_strength"
-                                        ],
-                                        label="ReID LoRA strength (diagnostic)",
-                                        info=(
-                                            "ReID only. Compare 0 and 1 with the same seed to "
-                                            "verify whether the adapter changes the result."
-                                        ),
-                                        visible=_REID_EXPERIMENTS_ENABLED,
-                                    )
-                                    reid_reference_method = gr.Dropdown(
-                                        choices=[
-                                            (
-                                                "Official isolated K/V cache (recommended)",
-                                                "isolated_cache",
-                                            ),
-                                            (
-                                                "Joint timestep-zero stream (diagnostic A/B)",
-                                                "joint_timestep_zero",
-                                            ),
-                                        ],
-                                        value=ADVANCED_SETTINGS_DEFAULTS[
-                                            "reid_reference_method"
-                                        ],
-                                        label="ReID reference injection",
-                                        info=(
-                                            "Joint stream matches the released ComfyUI graph: "
-                                            "target and reference attend together, with timestep-zero "
-                                            "modulation on the reference. Isolated cache preserves the "
-                                            "plugin's previous implementation for comparisons."
-                                        ),
-                                        visible=_REID_EXPERIMENTS_ENABLED,
+                                        info="Used by all Identity Edit fidelity modes.",
                                     )
                                     grounding_px = gr.Slider(
                                         minimum=384,
@@ -741,27 +772,6 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
                                             "safety limit. Use full selected resolution "
                                             "only when memory allows. Depth + Prompt "
                                             "always uses the selected resolution."
-                                        ),
-                                    )
-                                    secondary_reference_geometry = gr.Dropdown(
-                                        choices=[
-                                            (
-                                                "Aspect-preserving FIT (current/default)",
-                                                "fit",
-                                            ),
-                                            (
-                                                "Stretch to output geometry (legacy A/B)",
-                                                "stretch",
-                                            ),
-                                        ],
-                                        value=ADVANCED_SETTINGS_DEFAULTS[
-                                            "secondary_reference_geometry"
-                                        ],
-                                        label="Picture 2 reference geometry",
-                                        info=(
-                                            "Temporary Identity Edit diagnostic. FIT preserves "
-                                            "Picture 2's aspect ratio and centres its latent grid. "
-                                            "Legacy stretch resizes Picture 2 to the output geometry."
                                         ),
                                     )
                                     subject_attention_timing = gr.Dropdown(
@@ -964,12 +974,10 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
 
             modal_fields = [
                 generation_process,
+                outpaint_prompt,
                 grounding_px,
                 output_resolution_limit,
                 identity_lora_variant,
-                reid_lora_strength,
-                reid_reference_method,
-                secondary_reference_geometry,
                 subject_attention_timing,
                 subject_attention_ramp_early,
                 subject_attention_ramp_middle,
@@ -995,12 +1003,10 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
                 return [
                     gr.update(visible=True),
                     values["generation_process"],
+                    values["outpaint_prompt"],
                     values["grounding_px"],
                     values["output_resolution_limit"],
                     values["identity_lora_variant"],
-                    values["reid_lora_strength"],
-                    values["reid_reference_method"],
-                    values["secondary_reference_geometry"],
                     values["subject_attention_timing"],
                     values["subject_attention_ramp_early"],
                     values["subject_attention_ramp_middle"],
@@ -1066,12 +1072,10 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
             def apply_advanced(
                 state,
                 process,
+                registered_outpaint_prompt,
                 grounding,
                 resolution_limit,
                 variant,
-                reid_strength,
-                reid_method,
-                reference_geometry,
                 subject_timing,
                 subject_ramp_early,
                 subject_ramp_middle,
@@ -1094,12 +1098,10 @@ class Krea2IdentityAdvancedUI(WAN2GPPlugin):
                 packed = encode_advanced_settings(
                     {
                         "generation_process": process,
+                        "outpaint_prompt": registered_outpaint_prompt,
                         "grounding_px": grounding,
                         "output_resolution_limit": resolution_limit,
                         "identity_lora_variant": variant,
-                        "reid_lora_strength": reid_strength,
-                        "reid_reference_method": reid_method,
-                        "secondary_reference_geometry": reference_geometry,
                         "subject_attention_timing": subject_timing,
                         "subject_attention_ramp_early": subject_ramp_early,
                         "subject_attention_ramp_middle": subject_ramp_middle,

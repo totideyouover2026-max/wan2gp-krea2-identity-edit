@@ -134,12 +134,8 @@ Identity Edit defaults to WanGP's complete
 `Qwen3-VL-4B-Instruct_bf16.safetensors` checkpoint and loads its language and
 visual modules together through MMGP. Its image processor is built from
 WanGP's published `preprocessor_config.json`, matching the native Krea 2 Edit
-conditioning contract. A temporary load-time encoder A/B also exposes the
-former stack: the host-selected Quanto checkpoint supplies the language model,
-`Comfy-Org/Krea-2` supplies the scaled-FP8 visual tower, and the plugin restores
-the former manually configured Qwen2-VL processor. The built-in WanGP text
-encoder selector is used because this choice must be known before model
-construction; the unified BF16 checkpoint remains first and default.
+conditioning contract. The obsolete split Quanto-language/scaled-FP8-vision
+regression path is not exposed or downloaded.
 
 Identity Edit v1.2 full/r128/r64 LoRAs are selected dynamically through `get_loras_transformer`,
 which participates in WanGP's normal LoRA download, loading, scheduling and
@@ -152,10 +148,8 @@ The Identity Edit path keeps its first-reference aspect-ratio matching behavior
 for each supported variant. Reference 1 remains canvas-sized. Reference 2 uses
 the upstream FIT behavior: near-matching ratios are centre-cropped, while larger
 ratio differences are aspect-preservingly contained at an aligned size and
-assigned a centred latent/RoPE grid. A temporary Advanced Settings diagnostic
-can restore the former direct stretch to the output latent/RoPE geometry for
-Picture 2 only. FIT remains the default; the switch does not alter Picture 1,
-ReID, Depth + Prompt or the Qwen3-VL encoder stack. The v1.2 node pack's `ref_boost` attention
+assigned a centred latent/RoPE grid. The former direct-stretch diagnostic has
+been removed; Picture 2 always uses FIT geometry. The v1.2 node pack's `ref_boost` attention
 control is adapted as opt-in fidelity profiles within the existing identity
 method selector, avoiding an additional WanGP custom-control slot. The default
 profile remains 1x subject/1x scene and therefore produces the pre-boost
@@ -179,64 +173,29 @@ NAG because NAG constructs a different per-query attention mask.
 The removed KI/native-I experiment is migrated away rather than retained as a
 second variable. A lone Identity Edit reference always keeps the established
 WanGP `KI` main-image role, and two references always remain scene first and
-subject second. This isolates encoder precision and processor behavior as the
-only intended variable in the temporary A/B.
-
-ReID is a separate conditioning mode rather than another adapter layered onto
-Identity Edit. It is restricted to the Turbo checkpoint and one identity
-reference. Its reference mode deliberately omits WanGP's `K` main-scene flag,
-so the host preserves the identity image's aspect ratio instead of resizing it
-to the output canvas. Qwen3-VL receives the reference through the adapter's
-trained `Picture 1: <vision>` message contract. One aspect-preserving,
-16-pixel-aligned reference within a 384×384 area budget feeds both Qwen3-VL and
-the clean-reference VAE, matching the published Comfy graph. The default path
-keeps `[text | noisy target | clean reference]` as one live self-attention
-stream once through every block at timestep zero and retain each block's
-post-RoPE K/V. Target denoising appends those isolated cached keys and values at
-every step. RoPE frame 1 identifies the reference. Only the target is decoded.
-The experimental joint target/reference timestep-zero stream remains selectable
-as an Advanced Settings diagnostic.
-ReID output geometry follows the selected output resolution rather than the
-reference aspect. It forces 8 Turbo steps and effective CFG 1, supports the
-same target-only depth projection, and rejects Registered Outpaint.
-
-ReID reference preparation optionally follows the release's YuNet helper. It
-detects on a 320-square top-centred view, maps the strongest face back to the
-original pixels, and takes an expanded head crop before both Qwen and clean-VAE
-conditioning. The unchanged full reference remains available when clothing,
-pose or scene context is intentionally part of the reference signal.
+subject second. The runtime uses one unified encoder and processor path for
+both reference layouts.
 
 Depth + Prompt is the reference-free diagnostic and generation mode. It clears
 the grounded-image list, enables the conditioner's existing text-only path and
 runs the native `[text | noisy target]` stream with the trained depth projection
 added only to target tokens. Its LoRA list begins with the depth adapter rather
-than Identity Edit or ReID, so it provides a clean baseline for determining
+than Identity Edit, so it provides a clean baseline for determining
 whether pose behavior comes from depth itself or competition with identity
 conditioning. It requires Transfer Depth with strength above zero, follows the
 selected output resolution, supports the same whole-frame/inside/outside mask
 paths, and cannot be combined with Registered Outpaint.
 
-The optional **Depth then ReID** generation process composes those existing
-paths instead of replacing either one. Phase 1 calls Depth + Prompt with the
-ReID adapter and all user-added LoRAs set to zero. Its decoded RGB result is the
-source image for phase 2, which uses WanGP's existing source-image low-denoise
-restart with a full-frame mask. Phase 2 restores ReID and user-added LoRAs at
-their selected strengths and can either keep or disable depth. The handoff is a
-VAE decode/re-encode boundary, not an in-memory latent continuation; this keeps
-the experiment within WanGP's public pipeline contract and preserves normal
-callbacks, interruption and MMGP LoRA scheduling. Standard single-pass routing
-is unchanged when the option is off.
-
-The optional **Direct Image → ReID Edit** Control Image process uses WanGP's
+The optional **Direct Image → Identity Edit** Control Image process uses WanGP's
 native `VG` contract. `V` sends the uploaded image through the host's unchanged
 raw preprocessing path and `G` exposes its standard 0..1 denoising slider. The
 plugin converts the processed first frame back to RGB, supplies a full-frame
-edit mask, and calls the same source-image restart used by phase two, but in a
-single ReID pass. The separate ReID reference still supplies identity through
-Qwen3-VL and the selected official isolated-cache or diagnostic joint timestep-zero
-reference path. Depth preprocessing and the depth adapter are not loaded for
-this route. Initial support deliberately rejects painted masks, two-phase
-generation and Registered Outpaint.
+edit mask, and calls the ordinary Identity Edit pipeline with the source-image
+restart arguments. The normal ordered Identity Edit references still supply
+clean latent tokens and Qwen3-VL grounding, while the selected canvas aspect
+owns output geometry. Depth preprocessing and the depth adapter are not loaded
+for this route. Initial support deliberately rejects painted masks and
+Registered Outpaint.
 
 WanGP v12.34 exposes and persists only the first five model-defined custom
 controls. The handler uses four slots for the context-sensitive main form:
@@ -246,15 +205,22 @@ inserts a visible **Show Advanced Settings** Yes/No launcher after the host's
 custom-setting rows and edits that carrier through a fixed overlay modal. The
 modal owns Generation Process, grounding budget, Identity Edit LoRA variant,
 Identity Edit subject-attention timing, depth-mask feather and
-additional-LoRA timing. Legacy flat settings and the
-former independent `two_phase_mode`, phase-2 and `outpaint_mode` fields are
-expanded and migrated before validation or inference.
+additional-LoRA timing. Legacy flat settings are expanded and migrated before
+validation or inference.
 
 The same UI extension treats WanGP's top reference selector as authoritative:
-it synchronizes the hidden ReID/Depth-only method values, exposes the fidelity
+it synchronizes the hidden Depth-only method value, exposes the fidelity
 selector only for Identity Edit, hides subject-reference preparation in Depth +
 Prompt mode, and hides the semantic phrase unless SAM3 is selected. WanGP's
 native visibility flag continues to control the dedicated depth-strength slider.
+
+For generated-media information, validation records a small namespaced run
+context through WanGP's `plugin_data` channel. A `before_metadata_save` hook
+uses that context to write the advanced values that actually affected the run
+into `extra_info` as separate human-readable rows; dependent ramp values are
+omitted unless their timing mode was active. The same hook removes the hidden
+JSON carrier from the displayed custom-setting set while retaining normalized
+flat values, so importing settings from an output remains lossless.
 
 If WanGP does not expose a stable reusable boundary, copy only the smallest necessary Apache-compatible/reference sections and record their origin in `THIRD_PARTY_NOTICES.md`.
 
@@ -289,13 +255,24 @@ editable default template from `models/krea2_identity_prompt.py`. The separate
 advanced-settings overlay is plugin-owned and does not replace this native
 prompt-help modal.
 
-Registered Outpaint is an optional advanced generation task. WanGP resolves its
-native spatial margins and target aspect ratio; the plugin gives the unpadded
-source destination-relative rotary coordinates and computes isolated per-block
-K/V once at flow time zero. Only target/text tokens remain in the denoising
-loop. After decode, protected source pixels are restored with an inward feather.
-Identity + Outpaint reverses the two functional-adapter weights between passes;
-outpaint-only skips identity and Qwen image grounding.
+Registered Outpaint is an optional advanced generation task. For a target aspect
+ratio, WanGP's four direction values remain placement weights because the host
+cannot resolve them against this plugin's image-reference source. The plugin
+therefore derives the aspect-preserving source rectangle from the actual source
+and final canvas, applies only the weights on the axis that requires expansion,
+and logs the resulting pixel margins. Manual left/right or top/bottom expansion
+is supported in one pass; mixed horizontal-and-vertical margins are rejected
+until the planned two-pass interior placement exists.
+
+The plugin gives the unpadded source destination-relative rotary coordinates and
+computes isolated per-block K/V once at flow time zero. Only target/text tokens
+remain in the denoising loop. After decode, protected source pixels are restored
+with an inward feather. Identity + Outpaint reverses the two functional-adapter
+weights between passes; outpaint-only skips identity and Qwen image grounding.
+Both routes use the dedicated Advanced Settings outpaint prompt and a fresh
+default negative prompt. They do not receive the main generation prompts. The
+handler also overrides WanGP's native red-padding prompt mutation; the fixed
+Qwen model-system wrapper remains unchanged.
 
 ## Major technical risk
 

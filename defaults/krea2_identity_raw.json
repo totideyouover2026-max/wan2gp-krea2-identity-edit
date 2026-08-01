@@ -3,7 +3,7 @@
     "name": "Krea 2 Identity Edit — Raw (experimental)",
     "architecture": "krea2_identity_raw",
     "description": "EXPERIMENTAL: CFG-guided identity-preserving Krea 2 Raw Identity Edit with optional reference-fidelity attention profiles, optional depth control and reference-free Depth + Prompt generation. Standard 1x/1x reference fidelity preserves the original behavior.\n\nDepth + Prompt loads only the depth adapter and requires Transfer Depth with no reference image. When using the Unlocker LoRA alongside depth control, use a strength of 0.01; higher values can overpower depth guidance. If unwanted depth structure carries into the result, use Inside Mask to constrain depth to the desired area, or Outside Mask to exclude painted objects.\n\nQwen3-VL grounding resolution controls the image resolution used for Identity Edit reference analysis. The scene controls Identity Edit output aspect; Depth + Prompt uses the selected output resolution.",
-    "visible": true,
+    "visible": false,
     "URLs": [
       "https://huggingface.co/DeepBeepMeep/krea-2/resolve/main/Krea2Raw_bf16.safetensors",
       "https://huggingface.co/DeepBeepMeep/krea-2/resolve/main/Krea2Raw_quanto_bf16_int8.safetensors"
@@ -27,9 +27,6 @@
     "grounding_px": 768,
     "output_resolution_limit": "safe_2mp",
     "identity_lora_variant": "full_v1.2",
-    "reid_lora_strength": 1.0,
-    "reid_reference_method": "isolated_cache",
-    "secondary_reference_geometry": "fit",
     "subject_attention_timing": "constant",
     "subject_attention_ramp_early": 1.0,
     "subject_attention_ramp_middle": 2.0,
@@ -49,6 +46,6 @@
     "subject_background_removal": "off",
     "subject_segmentation_prompt": "person",
     "generation_process": "standard",
-    "advanced_settings": "{\"depth_mask_feather_px\":16,\"depth_user_lora_ramp_early\":0.0,\"depth_user_lora_ramp_final\":1.0,\"depth_user_lora_ramp_middle\":0.25,\"depth_user_lora_timing\":\"depth_first\",\"generation_process\":\"standard\",\"grounding_px\":768,\"identity_lora_variant\":\"full_v1.2\",\"output_resolution_limit\":\"safe_2mp\",\"reid_lora_strength\":1.0,\"reid_reference_method\":\"isolated_cache\",\"secondary_reference_geometry\":\"fit\",\"subject_attention_ramp_early\":1.0,\"subject_attention_ramp_final\":8.0,\"subject_attention_ramp_middle\":2.0,\"subject_attention_timing\":\"constant\"}"
+    "advanced_settings": "{\"depth_mask_feather_px\":16,\"depth_user_lora_ramp_early\":0.0,\"depth_user_lora_ramp_final\":1.0,\"depth_user_lora_ramp_middle\":0.25,\"depth_user_lora_timing\":\"depth_first\",\"generation_process\":\"standard\",\"grounding_px\":768,\"identity_lora_variant\":\"full_v1.2\",\"output_resolution_limit\":\"safe_2mp\",\"subject_attention_ramp_early\":1.0,\"subject_attention_ramp_final\":8.0,\"subject_attention_ramp_middle\":2.0,\"subject_attention_timing\":\"constant\"}"
   }
 }

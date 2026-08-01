@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import importlib.util
-import os
 import sys
 import types
 import unittest
@@ -11,6 +10,8 @@ from unittest.mock import patch
 
 from models.krea2_advanced_settings import (
     ADVANCED_SETTINGS_DEFAULTS,
+    DEFAULT_OUTPAINT_PROMPT,
+    advanced_settings_metadata,
     encode_advanced_settings,
     expand_advanced_settings,
     normalize_advanced_settings,
@@ -24,14 +25,12 @@ class AdvancedSettingsTests(unittest.TestCase):
     def test_round_trip_is_canonical_and_validated(self):
         packed = encode_advanced_settings(
             {
-                "generation_process": "two_phase_025_keep",
+                "generation_process": "standard",
+                "outpaint_prompt": "Continue the stone wall into the right side.",
                 "grounding_px": 1024,
                 "output_resolution_limit": "unlimited",
                 "identity_lora_variant": "r64",
                 "identity_lora_variant_schema": "v1.2",
-                "reid_lora_strength": 0.5,
-                "reid_reference_method": "isolated_cache",
-                "secondary_reference_geometry": "stretch",
                 "subject_attention_timing": "ramp",
                 "subject_attention_ramp_early": 1.0,
                 "subject_attention_ramp_middle": 3.0,
@@ -54,14 +53,12 @@ class AdvancedSettingsTests(unittest.TestCase):
         self.assertEqual(
             normalize_advanced_settings(packed),
             {
-                "generation_process": "two_phase_025_keep",
+                "generation_process": "standard",
+                "outpaint_prompt": "Continue the stone wall into the right side.",
                 "grounding_px": 1024,
                 "output_resolution_limit": "unlimited",
                 "identity_lora_variant": "r64",
                 "identity_lora_variant_schema": "v1.2",
-                "reid_lora_strength": 0.5,
-                "reid_reference_method": "isolated_cache",
-                "secondary_reference_geometry": "stretch",
                 "subject_attention_timing": "ramp",
                 "subject_attention_ramp_early": 1.0,
                 "subject_attention_ramp_middle": 3.0,
@@ -84,24 +81,20 @@ class AdvancedSettingsTests(unittest.TestCase):
     def test_legacy_flat_settings_are_preserved_and_packed(self):
         expanded = expand_advanced_settings(
             {
-                "identity_method": "reid",
+                "identity_method": "identity_edit",
                 "grounding_px": 896,
                 "identity_lora_variant": "r128",
                 "depth_mask_feather_px": 4,
                 "depth_user_lora_timing": "all_steps",
-                "two_phase_mode": "depth_then_reid",
-                "phase2_denoising_strength": 0.25,
-                "phase2_depth_mode": "keep",
+                "generation_process": "standard",
             }
         )
-        self.assertEqual(expanded["identity_method"], "reid")
-        self.assertEqual(expanded["generation_process"], "two_phase_025_keep")
+        self.assertEqual(expanded["identity_method"], "identity_edit")
+        self.assertEqual(expanded["generation_process"], "standard")
+        self.assertEqual(expanded["outpaint_prompt"], DEFAULT_OUTPAINT_PROMPT)
         self.assertEqual(expanded["grounding_px"], 896)
         self.assertEqual(expanded["output_resolution_limit"], "safe_2mp")
         self.assertEqual(expanded["identity_lora_variant"], "r128")
-        self.assertEqual(expanded["reid_lora_strength"], 1.0)
-        self.assertEqual(expanded["reid_reference_method"], "isolated_cache")
-        self.assertEqual(expanded["secondary_reference_geometry"], "fit")
         self.assertEqual(expanded["subject_attention_timing"], "constant")
         self.assertEqual(expanded["subject_attention_ramp_early"], 1.0)
         self.assertEqual(expanded["subject_attention_ramp_middle"], 2.0)
@@ -120,7 +113,7 @@ class AdvancedSettingsTests(unittest.TestCase):
         self.assertEqual(expanded["depth_user_lora_ramp_final"], 1.0)
         self.assertEqual(
             json.loads(expanded["advanced_settings"])["generation_process"],
-            "two_phase_025_keep",
+            "standard",
         )
 
     def test_packed_values_override_legacy_flat_values(self):
@@ -162,14 +155,6 @@ class AdvancedSettingsTests(unittest.TestCase):
             normalize_advanced_settings({"grounding_px": 100})
         with self.assertRaisesRegex(ValueError, "output_resolution_limit"):
             normalize_advanced_settings({"output_resolution_limit": "adaptive"})
-        with self.assertRaisesRegex(ValueError, "secondary_reference_geometry"):
-            normalize_advanced_settings(
-                {"secondary_reference_geometry": "crop"}
-            )
-        with self.assertRaisesRegex(ValueError, "reid_lora_strength"):
-            normalize_advanced_settings({"reid_lora_strength": 2.1})
-        with self.assertRaisesRegex(ValueError, "reid_reference_method"):
-            normalize_advanced_settings({"reid_reference_method": "detached"})
         with self.assertRaisesRegex(ValueError, "non-decreasing"):
             normalize_advanced_settings(
                 {
@@ -188,12 +173,24 @@ class AdvancedSettingsTests(unittest.TestCase):
                     "subject_attention_ramp_final": 4.0,
                 }
             )
+        with self.assertRaisesRegex(ValueError, "outpaint_prompt"):
+            normalize_advanced_settings({"outpaint_prompt": "x" * 2001})
+
+    def test_empty_outpaint_prompt_uses_conservative_default(self):
+        normalized = normalize_advanced_settings({"outpaint_prompt": "  "})
+        self.assertEqual(normalized["outpaint_prompt"], DEFAULT_OUTPAINT_PROMPT)
 
     def test_removed_single_reference_role_is_ignored_during_migration(self):
         normalized = normalize_advanced_settings(
             {"single_reference_role": "native_subject"}
         )
         self.assertNotIn("single_reference_role", normalized)
+
+    def test_removed_secondary_geometry_is_ignored_during_migration(self):
+        normalized = normalize_advanced_settings(
+            {"secondary_reference_geometry": "stretch"}
+        )
+        self.assertNotIn("secondary_reference_geometry", normalized)
 
     def test_removed_v11_full_selection_migrates_to_v12_full_default(self):
         self.assertEqual(
@@ -207,9 +204,78 @@ class AdvancedSettingsTests(unittest.TestCase):
             "full_v1.2",
         )
 
+    def test_output_metadata_hides_inactive_builtin_ramps(self):
+        rows = advanced_settings_metadata(
+            {"builtin_adapter_timing": "simultaneous"},
+            identity_method="identity_edit",
+            depth_active=True,
+        )
+        self.assertEqual(rows["Builtin Adapter Timing"], "Simultaneous")
+        self.assertFalse(
+            any(label.startswith("Builtin Depth Ramp") for label in rows)
+        )
+        self.assertFalse(
+            any(label.startswith("Builtin Identity Edit Ramp") for label in rows)
+        )
+
+    def test_output_metadata_records_only_active_outpaint_prompt(self):
+        inactive = advanced_settings_metadata(
+            {"outpaint_prompt": "Continue the tiled floor."},
+            identity_method="identity_edit",
+        )
+        self.assertNotIn("Registered Outpaint Prompt", inactive)
+        active = advanced_settings_metadata(
+            {
+                "generation_process": "identity_then_outpaint",
+                "outpaint_prompt": "Continue the tiled floor.",
+            },
+            identity_method="identity_edit",
+        )
+        self.assertEqual(
+            active["Registered Outpaint Prompt"],
+            "Continue the tiled floor.",
+        )
+
+    def test_output_metadata_shows_only_active_dependent_settings(self):
+        rows = advanced_settings_metadata(
+            {
+                "builtin_adapter_timing": "depth_then_identity",
+                "subject_attention_timing": "ramp",
+                "depth_user_lora_timing": "all_steps",
+            },
+            identity_method="identity_edit",
+            depth_active=True,
+            depth_mask_active=True,
+            user_lora_count=1,
+        )
+        self.assertEqual(
+            rows["Builtin Adapter Timing"],
+            "Depth Layout → Identity Refinement",
+        )
+        self.assertIn("Builtin Depth Ramp — Early", rows)
+        self.assertIn("Builtin Identity Edit Ramp — Final", rows)
+        self.assertIn("Subject Attention Ramp — Middle", rows)
+        self.assertEqual(rows["Depth Mask Feather"], "16 px")
+        self.assertEqual(
+            rows["Additional LoRA Timing With Depth"], "All Steps"
+        )
+        self.assertFalse(
+            any(label.startswith("Additional LoRA Ramp") for label in rows)
+        )
+
+    def test_output_metadata_omits_settings_for_inactive_features(self):
+        rows = advanced_settings_metadata(
+            {},
+            identity_method="depth_prompt",
+            depth_active=True,
+            user_lora_count=0,
+        )
+        self.assertEqual(rows, {"Generation Process": "Standard Single Pass"})
+
     def test_plugin_owns_launcher_modal_and_adaptive_visibility(self):
         source = (ROOT / "plugin.py").read_text(encoding="utf-8")
         self.assertIn('label="Show Advanced Settings"', source)
+        self.assertIn('label="Registered Outpaint prompt"', source)
         self.assertIn(
             "initial_launcher_visible = _plugin_active(self.state.value)", source
         )
@@ -219,18 +285,8 @@ class AdvancedSettingsTests(unittest.TestCase):
         self.assertIn(
             "Depth layout → Identity refinement (experimental)", source
         )
-        self.assertIn('label="ReID LoRA strength (diagnostic)"', source)
-        self.assertIn('label="ReID reference injection"', source)
         self.assertIn(
             'label="Reference-mode output resolution limit"', source
-        )
-        self.assertIn(
-            '"Joint timestep-zero stream (diagnostic A/B)"',
-            source,
-        )
-        self.assertIn(
-            '"Official isolated K/V cache (recommended)"',
-            source,
         )
         self.assertIn('choices=[("No", "no"), ("Yes", "yes")]', source)
         self.assertIn("krea2-advanced-floating", source)
@@ -247,14 +303,13 @@ class AdvancedSettingsTests(unittest.TestCase):
         self.assertIn('"Generate Effective Depth Preview"', source)
         self.assertIn('initial_mode == "identity_edit"', source)
         self.assertIn('choices=_ALL_IDENTITY_METHOD_CHOICES', source)
-        self.assertIn('("ReID (selected by reference mode)", "reid")', source)
         self.assertIn(
             '("Depth + prompt only (selected by reference mode)", "depth_prompt")',
             source,
         )
-        self.assertIn('mode in {"identity_edit", "reid"}', source)
+        self.assertIn('reference_visible = mode == "identity_edit"', source)
         self.assertIn('preparation == "sam3"', source)
-        self.assertIn('"two_phase_025_keep"', source)
+        self.assertIn('"outpaint_only"', source)
         self.assertIn('"identity_then_outpaint"', source)
         self.assertIn('maximum=64', source)
         self.assertIn('label="Early third"', source)
@@ -262,14 +317,12 @@ class AdvancedSettingsTests(unittest.TestCase):
         self.assertNotIn("Native I — identity subject", source)
         self.assertIn('label="Middle third"', source)
         self.assertIn('label="Final third"', source)
-        self.assertIn('label="Picture 2 reference geometry"', source)
         self.assertIn('label="Identity Edit subject-attention timing"', source)
         self.assertIn('label="Subject early third"', source)
         self.assertIn('label="Subject middle third"', source)
         self.assertIn('label="Subject final third"', source)
-        self.assertIn(
-            '"Stretch to output geometry (legacy A/B)"', source
-        )
+        self.assertNotIn("secondary_reference_geometry", source)
+        self.assertNotIn("Stretch to output geometry", source)
         self.assertIn('("v1.2 Full — 1.83 GB (recommended)", "full_v1.2")', source)
         self.assertIn('("v1.2 Rank 128 — 0.91 GB", "r128")', source)
         self.assertIn('("v1.2 Rank 64 — 0.46 GB", "r64")', source)
@@ -288,8 +341,6 @@ class AdvancedSettingsTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location(module_name, ROOT / "plugin.py")
         module = importlib.util.module_from_spec(spec)
         with patch.dict(
-            os.environ, {"KREA2_IDENTITY_ENABLE_REID_EXPERIMENTS": ""}
-        ), patch.dict(
             sys.modules,
             {
                 package_name: package,
@@ -317,6 +368,7 @@ class AdvancedSettingsTests(unittest.TestCase):
                 self._component_requests = []
                 self._insert_after_requests = []
                 self._global_requests = []
+                self._data_hooks = {}
 
             def request_component(self, component_id):
                 self._component_requests.append(component_id)
@@ -326,6 +378,9 @@ class AdvancedSettingsTests(unittest.TestCase):
 
             def add_custom_js(self, js_code):
                 self._custom_js = js_code
+
+            def register_data_hook(self, hook_name, callback):
+                self._data_hooks.setdefault(hook_name, []).append(callback)
 
             def insert_after(self, target, constructor):
                 self._insert_after_requests.append((target, constructor))
@@ -341,8 +396,6 @@ class AdvancedSettingsTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location(module_name, ROOT / "plugin.py")
         module = importlib.util.module_from_spec(spec)
         with patch.dict(
-            os.environ, {"KREA2_IDENTITY_ENABLE_REID_EXPERIMENTS": ""}
-        ), patch.dict(
             sys.modules,
             {
                 package_name: package,
@@ -362,9 +415,8 @@ class AdvancedSettingsTests(unittest.TestCase):
         }
         self.assertEqual(
             module._synchronized_identity_method("identity_edit_ref4", "I"),
-            "identity_edit",
+            "identity_edit_ref4",
         )
-        self.assertNotIn("disabled_reid", synchronized_values)
         self.assertTrue(synchronized_values <= identity_choice_values)
 
         inactive_state = {"active_form": "add", "model_type": "wan2.1_t2v"}
@@ -405,6 +457,47 @@ class AdvancedSettingsTests(unittest.TestCase):
         extension = module.Krea2IdentityAdvancedUI()
         extension.setup_ui()
         self.assertIn("krea2-advanced-drag-handle", extension._custom_js)
+        self.assertIn("before_metadata_save", extension._data_hooks)
+        cleaned_metadata = extension._data_hooks["before_metadata_save"][0](
+            {
+                "video_prompt_type": "KIDV",
+                "custom_settings": {
+                    "identity_method": "identity_edit",
+                    "depth_control_strength": 1.0,
+                    "_registered_outpaint_ratio": "16:9",
+                    "advanced_settings": encode_advanced_settings(
+                        {"builtin_adapter_timing": "simultaneous"}
+                    ),
+                }
+            },
+            plugin_data={
+                "krea2_identity_output_metadata": {
+                    "identity_method": "identity_edit",
+                    "depth_active": True,
+                    "depth_mask_active": False,
+                    "reference_count": 1,
+                    "user_lora_count": 0,
+                }
+            },
+            model_type="krea2_identity_turbo",
+        )
+        self.assertNotIn(
+            "advanced_settings", cleaned_metadata["custom_settings"]
+        )
+        self.assertNotIn(
+            "_registered_outpaint_ratio", cleaned_metadata["custom_settings"]
+        )
+        self.assertEqual(
+            cleaned_metadata["custom_settings"]["builtin_adapter_timing"],
+            "simultaneous",
+        )
+        self.assertEqual(
+            cleaned_metadata["extra_info"]["Builtin Adapter Timing"],
+            "Simultaneous",
+        )
+        self.assertNotIn(
+            "Builtin Depth Ramp — Early", cleaned_metadata["extra_info"]
+        )
         with gr.Blocks():
             extension.state = gr.State(
                 {"active_form": "add", "model_type": "krea2_identity_turbo"}
@@ -423,7 +516,7 @@ class AdvancedSettingsTests(unittest.TestCase):
             ] + [gr.Textbox(value=encode_advanced_settings(), visible=False)]
             extension.custom_setting_dropdown_inputs = [
                 gr.Dropdown(
-                    choices=[("Identity Edit", "identity_edit"), ("ReID", "reid")],
+                    choices=[("Identity Edit", "identity_edit")],
                     value="identity_edit",
                 ),
                 gr.Dropdown(),
@@ -441,7 +534,6 @@ class AdvancedSettingsTests(unittest.TestCase):
             }
             self.assertIn("identity_edit_ref2", identity_choice_values)
             self.assertIn("identity_edit_ref8_scene2", identity_choice_values)
-            self.assertNotIn("reid", identity_choice_values)
             self.assertIn("depth_prompt", identity_choice_values)
             self.assertEqual(len(extension._insert_after_requests), 2)
             constructors = dict(extension._insert_after_requests)

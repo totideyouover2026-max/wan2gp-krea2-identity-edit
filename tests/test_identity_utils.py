@@ -12,7 +12,6 @@ from models.krea2_identity_utils import (
     depth_control_lora_url,
     direct_image_control_selected,
     fit_identity_reference_geometry,
-    fit_reference_pixel_budget,
     identity_lora_url,
     match_reference_dimensions,
     migrate_generation_process,
@@ -23,11 +22,8 @@ from models.krea2_identity_utils import (
     subject_attention_boost_for_step,
     resolve_wangp_checkpoint,
     outpaint_lora_url,
-    reid_lora_url,
     validate_outpaint_mode,
     validate_outpaint_seam_px,
-    validate_phase2_denoising_strength,
-    validate_phase2_depth_mode,
     validate_depth_control_strength,
     validate_depth_user_lora_ramp,
     validate_depth_user_lora_timing,
@@ -37,11 +33,8 @@ from models.krea2_identity_utils import (
     validate_generation_process,
     validate_identity_method,
     validate_reference_images,
-    validate_reid_reference_images,
-    validate_reid_lora_strength,
     validate_subject_attention_ramp,
     validate_subject_attention_timing,
-    validate_two_phase_mode,
 )
 
 
@@ -68,14 +61,6 @@ class FakeExpandedWeight:
 
 
 class IdentityUtilsTests(unittest.TestCase):
-    def test_reid_lora_strength_is_bounded(self):
-        self.assertEqual(validate_reid_lora_strength(None), 1.0)
-        self.assertEqual(validate_reid_lora_strength("0.5"), 0.5)
-        self.assertEqual(validate_reid_lora_strength(2), 2.0)
-        for invalid in (-0.1, 2.1, True, "bad", float("inf")):
-            with self.assertRaises(ValueError):
-                validate_reid_lora_strength(invalid)
-
     def test_grounding_px_is_bounded(self):
         self.assertEqual(validate_grounding_px(None), 768)
         self.assertEqual(validate_grounding_px("1024"), 1024)
@@ -145,21 +130,11 @@ class IdentityUtilsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             identity_lora_url("v1")
 
-    def test_reid_contract_uses_published_reference_budget(self):
-        reference = FakeImage((1600, 900))
+    def test_identity_method_rejects_removed_or_unknown_profiles(self):
         self.assertEqual(validate_identity_method(None), "identity_edit")
-        self.assertEqual(validate_identity_method("reid"), "reid")
         self.assertEqual(validate_identity_method("depth_prompt"), "depth_prompt")
         with self.assertRaises(ValueError):
             validate_identity_method("stacked")
-        self.assertEqual(validate_reid_reference_images([reference]), [reference])
-        with self.assertRaisesRegex(ValueError, "exactly one"):
-            validate_reid_reference_images([reference, FakeImage()])
-        width, height = fit_reference_pixel_budget(reference.size)
-        self.assertLessEqual(width * height, 384 * 384)
-        self.assertEqual((width % 16, height % 16), (0, 0))
-        self.assertAlmostEqual(width / height, 16 / 9, delta=0.08)
-        self.assertTrue(reid_lora_url().endswith("krea2_reid_rank32.safetensors"))
 
     def test_identity_edit_reference_fidelity_profiles_are_opt_in(self):
         self.assertEqual(validate_identity_method("identity_edit_ref4"), "identity_edit")
@@ -183,7 +158,6 @@ class IdentityUtilsTests(unittest.TestCase):
             resolve_identity_reference_boosts("identity_edit_ref8_scene2"),
             (8.0, 2.0),
         )
-        self.assertEqual(resolve_identity_reference_boosts("reid"), (1.0, 1.0))
         with self.assertRaises(ValueError):
             resolve_identity_reference_boosts("identity_edit_ref1000")
 
@@ -220,30 +194,11 @@ class IdentityUtilsTests(unittest.TestCase):
             [(1.0, 0)] * 3 + [(2.0, 1)] * 3 + [(8.0, 2)] * 2,
         )
 
-    def test_two_phase_settings_are_opt_in_and_low_noise(self):
-        self.assertEqual(validate_two_phase_mode(None), "off")
-        self.assertEqual(validate_two_phase_mode("depth_then_reid"), "depth_then_reid")
-        self.assertEqual(validate_phase2_denoising_strength(None), 0.25)
-        self.assertEqual(validate_phase2_denoising_strength("0.15"), 0.15)
-        self.assertEqual(validate_phase2_depth_mode(None), "keep")
-        self.assertEqual(validate_phase2_depth_mode("off"), "off")
-        for invalid in (0.0, 0.51, float("inf"), True, "bad"):
-            with self.assertRaises(ValueError):
-                validate_phase2_denoising_strength(invalid)
-        with self.assertRaises(ValueError):
-            validate_two_phase_mode("replace_standard")
-        with self.assertRaises(ValueError):
-            validate_phase2_depth_mode("sometimes")
-
-    def test_visible_generation_profiles_restore_hidden_controls(self):
+    def test_visible_generation_profiles_cover_standard_and_outpaint(self):
         self.assertEqual(validate_generation_process(None), "standard")
         self.assertEqual(
-            resolve_generation_process({"generation_process": "two_phase_015_keep"}),
-            ("depth_then_reid", 0.15, "keep", "off"),
-        )
-        self.assertEqual(
-            resolve_generation_process({"generation_process": "two_phase_025_off"}),
-            ("depth_then_reid", 0.25, "off", "off"),
+            resolve_generation_process({"generation_process": "standard"}),
+            ("off", 0.25, "keep", "off"),
         )
         self.assertEqual(
             resolve_generation_process({"generation_process": "outpaint_only"}),
@@ -252,12 +207,10 @@ class IdentityUtilsTests(unittest.TestCase):
         self.assertEqual(
             migrate_generation_process(
                 {
-                    "two_phase_mode": "depth_then_reid",
-                    "phase2_denoising_strength": 0.25,
-                    "phase2_depth_mode": "keep",
+                    "generation_process": "removed_process",
                 }
             ),
-            "two_phase_025_keep",
+            "standard",
         )
         with self.assertRaises(ValueError):
             validate_generation_process("custom")

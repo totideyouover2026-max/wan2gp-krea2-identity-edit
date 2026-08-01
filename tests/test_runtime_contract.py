@@ -53,13 +53,11 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertIn("subject_attention_timing=subject_attention_timing", self.source)
         self.assertIn("subject-attention ramp active", self.source)
 
-    def test_secondary_reference_geometry_is_preserved_and_centered(self):
+    def test_secondary_reference_geometry_is_always_preserved_and_centered(self):
         self.assertIn("fit_identity_reference_geometry", self.source)
         self.assertIn("fit_secondary_reference and reference_index >= 1", self.source)
-        self.assertIn(
-            'fit_secondary_reference=secondary_reference_geometry == "fit"',
-            self.source,
-        )
+        self.assertIn("fit_secondary_reference=True", self.source)
+        self.assertNotIn("secondary_reference_geometry", self.source)
         self.assertIn("self.transformer._identity_source_grids = source_grids", self.source)
         self.assertIn("offset_h = (target_grid_h - grid_h) // 2", self.source)
         self.assertIn("offset_w = (target_grid_w - grid_w) // 2", self.source)
@@ -98,14 +96,6 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertIn("depth_control_strength=depth_strength", self.source)
         self.assertIn("F.linear(depth.to(target.dtype), weight) * depth_scale", self.source)
 
-    def test_reid_adapter_has_a_validated_diagnostic_strength(self):
-        self.assertIn("validate_reid_lora_strength", self.source)
-        self.assertIn(
-            'reid_lora_strength if identity_method == "reid" else 1.0',
-            self.source,
-        )
-        self.assertIn('f"reid_lora_strength={reid_lora_strength:.2f}', self.source)
-
     def test_depth_can_delay_user_loras_until_geometry_is_established(self):
         self.assertIn("validate_depth_user_lora_timing", self.source)
         self.assertIn("validate_depth_user_lora_ramp", self.source)
@@ -115,26 +105,19 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertIn("middle={middle:.2f}", self.source)
         self.assertIn("final={final:.2f}", self.source)
 
-    def test_two_phase_reid_is_opt_in_and_preserves_single_pass_routing(self):
-        self.assertIn('two_phase_mode == "off"', self.source)
-        self.assertIn('two_phase_mode == "depth_then_reid"', self.source)
-        self.assertIn("phase1_images = self.pipeline.generate_depth_prompt", self.source)
-        self.assertIn("source_image=phase1_source", self.source)
-        self.assertIn("image_mask=full_frame_mask", self.source)
-        self.assertIn("denoising_strength=phase2_denoising_strength", self.source)
-        self.assertIn("images = self.pipeline.generate_reid", self.source)
-        self.assertIn("def _with_phase_lora_weights", self.source)
-        self.assertIn("user_scale=0.0", self.source)
-        self.assertIn("user_scale=1.0", self.source)
-
-    def test_direct_image_reid_reuses_wangp_source_restart_without_depth(self):
+    def test_direct_image_identity_edit_reuses_source_restart_without_depth(self):
         self.assertIn("direct_image_control_selected", self.source)
         self.assertIn("def _wangp_control_to_pil", self.source)
         self.assertIn("direct_image_control = input_frames if direct_image_active else None", self.source)
-        self.assertIn("[Krea2 Identity][Direct Image] ReID refinement", self.source)
+        self.assertIn("[Krea2 Identity][Direct Image] Identity Edit refinement", self.source)
+        self.assertIn("images = self.pipeline.generate_identity", self.source)
+        self.assertIn("reference_images=identity_pass_references", self.source)
         self.assertIn("source_image=direct_source", self.source)
         self.assertIn("denoising_strength=direct_image_denoising", self.source)
         self.assertIn("image_mask=full_frame_mask", self.source)
+        self.assertIn("depth_control=None", self.source)
+        self.assertIn("if direct_image_active", self.source)
+        self.assertIn("else original_references[0].size", self.source)
 
     def test_plugin_phase_switches_target_leading_functional_loras(self):
         self.assertIn("def _with_plugin_lora_weights", self.source)
@@ -147,16 +130,18 @@ class RuntimeContractTests(unittest.TestCase):
         self.assertNotIn("AutoModelForDepthEstimation", self.source)
         self.assertNotIn("depth_reference_index", self.source)
 
-    def test_input_fingerprints_make_stale_queue_data_diagnosable(self):
+    def test_input_fingerprints_are_available_only_in_debug_mode(self):
         self.assertIn("def _content_fingerprint", self.source)
+        self.assertIn("KREA2_IDENTITY_DEBUG", self.source)
+        self.assertIn("if _debug_diagnostics_enabled():", self.source)
         self.assertIn("[Krea2 Identity][Inputs]", self.source)
         self.assertIn("processed_depth={_content_fingerprint(depth_control)}", self.source)
         self.assertIn("mask={_content_fingerprint(depth_mask)}", self.source)
 
-    def test_encoder_ab_logs_grounded_conditioning_fingerprint(self):
+    def test_debug_mode_can_log_grounded_conditioning_fingerprint(self):
         self.assertIn("def _sampled_conditioning_diagnostics", self.source)
         self.assertIn(
-            "[Krea2 Identity][Encoder] grounded conditioning:", self.source
+            "[Krea2 Identity][Debug][Encoder] grounded conditioning:", self.source
         )
         self.assertIn("mask_source={mask_source}", self.source)
 
@@ -198,7 +183,7 @@ class RuntimeContractTests(unittest.TestCase):
             self.source,
         )
         self.assertIn("original_references[0].size", self.source)
-        self.assertIn("reference_images=references", self.source)
+        self.assertIn("identity_pass_references = references", self.source)
 
     def test_identity_then_outpaint_uses_original_upload_in_identity_phase(self):
         self.assertIn("identity_pass_references = references", self.source)
@@ -212,58 +197,36 @@ class RuntimeContractTests(unittest.TestCase):
         )
         self.assertIn("identity phase reference source=", self.source)
 
+    def test_outpaint_uses_an_isolated_prompt_and_negative_prompt(self):
+        self.assertIn(
+            "outpaint_prompts = [outpaint_prompt] * int(batch_size)",
+            self.source,
+        )
+        self.assertIn(
+            'outpaint_prompt = str(settings.get("outpaint_prompt", "") or "").strip()',
+            self.source,
+        )
+        self.assertIn(
+            'outpaint_common["negative_prompts"] = [',
+            self.source,
+        )
+        self.assertIn(
+            "generate_registered_outpaint(\n                outpaint_prompts,",
+            self.source,
+        )
+        self.assertIn(
+            "outpainting_ratio=registered_outpaint_ratio",
+            self.source,
+        )
+
     def test_cfg_and_interrupt_paths_exist(self):
         functions = {
             node.name for node in ast.walk(self.tree)
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
         self.assertIn("_identity_forward_cfg", functions)
-        self.assertIn("_reid_forward", functions)
-        self.assertIn("_reid_forward_cfg", functions)
+        self.assertIn("_outpaint_forward_cfg", functions)
         self.assertIn("_interrupt", functions)
-
-    def test_reid_supports_official_joint_and_legacy_isolated_reference_paths(self):
-        self.assertIn("def _reid_reference_positions", self.source)
-        self.assertIn("def _reid_build_joint_stream", self.source)
-        self.assertIn("def _reid_joint_timestep_zero_block", self.source)
-        self.assertIn('"_reid_reference_method"', self.source)
-        self.assertIn('"joint_timestep_zero"', self.source)
-        self.assertIn('"isolated_cache"', self.source)
-        self.assertIn("reference_start = txtlen + target_len", self.source)
-        self.assertIn("joint timestep-zero stream active", self.source)
-        self.assertIn("def _mmgp_adapter_status", self.source)
-        self.assertIn('_log_required_mmgp_adapter(self.transformer, 0, "ReID")', self.source)
-        self.assertIn("positions[..., 0] = 1", self.source)
-        self.assertIn("self.transformer._reid_ref_kv = _precompute_registered_kv", self.source)
-        self.assertIn("cached_kv=cached_kv", self.source)
-        self.assertIn("mask=stream_mask", self.source)
-        self.assertIn("mask = torch.cat((mask, reference_mask), dim=-1)", self.source)
-        self.assertIn("attention([q, k, v], mask=mask", self.source)
-        self.assertIn('f"Picture {index + 1}: "', self.source)
-        self.assertIn("name_references=True", self.source)
-        self.assertIn("qwen_grounding=Picture 1", self.source)
-        self.assertIn("vae=posterior-sample", self.source)
-        self.assertIn("latent_dist.sample(generator)", self.source)
-        self.assertIn("validate_reid_reference_images", self.source)
-        self.assertIn("REID_QWEN_MAX_PIXELS", self.source)
-        self.assertIn("REID_VAE_MAX_PIXELS", self.source)
-        self.assertIn("vae_pixels=", self.source)
-        self.assertIn("qwen_pixels=", self.source)
-        self.assertIn("Image.Resampling.BILINEAR", self.source)
-        self.assertIn("self.encoder.set_references(\n            [reference],", self.source)
-        self.assertIn("def _sampled_kv_cache_diagnostics", self.source)
-        self.assertIn("k_rms=", self.source)
-        self.assertIn("v_rms=", self.source)
-        self.assertIn("qwen_max_pixels=", self.source)
-        self.assertIn("sampling_steps = REID_INFERENCE_STEPS", self.source)
-        self.assertIn("guide_scale = 0", self.source)
-        self.assertIn("images = self.pipeline.generate_reid", self.source)
-
-    def test_reid_keeps_requested_output_aspect_instead_of_reference_aspect(self):
-        self.assertIn(
-            'if identity_method == "reid"\n                    else original_references[0].size',
-            self.source,
-        )
 
     def test_depth_prompt_bypasses_reference_mode_output_cap(self):
         self.assertIn(
@@ -296,17 +259,15 @@ class RuntimeContractTests(unittest.TestCase):
             "return [depth_control_lora_url()], [depth_strength]", self.source
         )
 
-    def test_load_time_encoder_stack_ab_is_real_and_bf16_remains_default(self):
+    def test_only_unified_bf16_encoder_stack_remains(self):
         handler = (ROOT / "models" / "krea2_identity_handler.py").read_text(
             encoding="utf-8"
         )
         self.assertIn('Qwen3-VL-4B-Instruct_bf16.safetensors', handler)
-        self.assertIn('Qwen3-VL-4B-Instruct_quanto_bf16_int8.safetensors', handler)
-        self.assertIn('Comfy-Org/Krea-2', handler)
-        self.assertIn("def _uses_legacy_encoder_stack", self.source)
-        self.assertIn('modelPrefix="language_model"', self.source)
-        self.assertIn('visual_prefix = "model.visual."', self.source)
-        self.assertIn('stack={encoder_stack}', self.source)
+        self.assertNotIn('Qwen3-VL-4B-Instruct_quanto_bf16_int8.safetensors', handler)
+        self.assertNotIn('Comfy-Org/Krea-2', handler)
+        self.assertNotIn("def _uses_legacy_encoder_stack", self.source)
+        self.assertIn('stack=unified-bf16', self.source)
 
     def test_qwen_processor_uses_upstream_preprocessor_configuration(self):
         self.assertIn("Qwen2VLImageProcessorFast.from_pretrained", self.source)
@@ -331,8 +292,6 @@ class RuntimeContractTests(unittest.TestCase):
             "_depth_forward",
             "_depth_forward_cfg",
             "_outpaint_forward_cfg",
-            "_reid_forward",
-            "_reid_forward_cfg",
         ):
             parameters = [argument.arg for argument in functions[name].args.args]
             self.assertIn("target_len", parameters, name)

@@ -52,18 +52,6 @@ Automatic reference-background removal, when selected, applies only to the
 second/subject reference. For SAM3 isolation, use a short visual segmentation
 phrase that identifies the subject rather than describing the desired output.
 
-## ReID identity method
-
-- ReID is a Turbo-only alternative to Identity Edit and accepts exactly one
-  identity reference. A close face/head crop usually gives the strongest
-  identity signal, while a full reference can retain more appearance context.
-- Describe the desired final image normally, including the intended head
-  direction, gaze, expression and camera angle when those matter.
-- ReID fixes sampling to 8 steps with no separate CFG pass. It may use depth
-  control, but cannot be combined with Registered Outpaint in the same task.
-- Background isolation, when selected in ReID mode, applies to its sole
-  identity reference.
-
 ## Depth control
 
 - Describe the desired output; the depth adapter supplies structure and
@@ -82,15 +70,31 @@ phrase that identifies the subject rather than describing the desired output.
 - **Inside Mask** and **Outside Mask** limit where depth influences the target.
   These are conditioning masks, not output/inpainting masks.
 
-## Direct Image to ReID
+## Direct Image to Identity Edit
 
-- Select **Direct Image → ReID Edit** to use the Control Image itself as the
+- Select **Direct Image → Identity Edit** to use the Control Image itself as the
   starting composition rather than converting it to depth.
-- The separate ReID reference remains the identity authority. Describe the
-  desired edit and the details that should remain from the Control Image.
+- The normal Identity Edit reference or references remain the identity and
+  visual-content authority. Describe the desired edit and the details that
+  should remain from the Control Image.
 - Start with denoising strength `0.25`. Lower values preserve the Control Image
   more closely; higher values permit larger identity, clothing and scene edits.
-- This experimental path is Turbo/ReID-only and currently supports Whole Frame.
+- This experimental path supports Whole Frame and cannot be combined with
+  Transfer Depth or Registered Outpaint.
+
+## Registered Outpaint
+
+- Set the dedicated **Registered Outpaint prompt** in Advanced settings. The
+  outpaint pass does not reuse this main generation prompt.
+- Describe the complete expanded image as a conservative continuation of the
+  existing source: preserve scene, subjects, perspective, lighting, palette,
+  texture and style.
+- State any important continuation explicitly, such as extending the same wall,
+  floor, sky or landscape. Avoid requesting new subjects, objects, text, logos
+  or unrelated details unless they are intentionally wanted in the expansion.
+- Target-aspect-ratio direction sliders control source placement on the axis
+  that needs expansion. Manual mixed horizontal-and-vertical expansion is not
+  yet supported because it requires two registered passes.
 
 ## Useful details
 
@@ -127,16 +131,5 @@ unwanted obstruction.
 )
 
 
-def prompt_infos(*, include_reid: bool) -> tuple[str, str]:
-  """Return public help without unfinished developer-only ReID routes."""
-  title, markdown = KREA2_IDENTITY_PROMPT_INFOS
-  if include_reid:
-    return title, markdown
-
-  for heading in ("## ReID identity method", "## Direct Image to ReID"):
-    start = markdown.find(heading)
-    if start == -1:
-      continue
-    end = markdown.find("\n## ", start + len(heading))
-    markdown = markdown[:start] + (markdown[end + 1:] if end != -1 else "")
-  return title, markdown.strip()
+def prompt_infos() -> tuple[str, str]:
+    return KREA2_IDENTITY_PROMPT_INFOS

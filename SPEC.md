@@ -8,7 +8,6 @@ Provide Krea 2 Identity Edit as a separately installable WanGP model plugin with
 
 - WanGP Krea 2 Raw/Turbo implementation: `models/krea2/` in the host WanGP checkout.
 - Identity Edit weights and recommended settings: <https://huggingface.co/conradlocke/krea2-identity-edit>
-- ReID weights and pinned inference contract: <https://huggingface.co/yijunwang2/krea2-reid>
 - Reference dual-conditioning implementation: <https://github.com/lbouaraba/comfyui-krea2edit>
 - Krea 2 base checkpoints and license: <https://huggingface.co/krea/Krea-2-Raw>
 
@@ -18,11 +17,9 @@ Provide Krea 2 Identity Edit as a separately installable WanGP model plugin with
    - `krea2_identity_turbo`
    - `krea2_identity_raw`
 2. Reuse WanGP's Krea 2 transformer, Qwen image VAE and compatible scheduler behavior where possible.
-3. Default to the complete BF16 Qwen3-VL conditioning path required for image
+3. Use the complete BF16 Qwen3-VL conditioning path required for image
    grounding, including the visual encoder, from WanGP's unified Identity Edit
-   checkpoint. For controlled regression testing, also expose the former
-   Quanto-language plus scaled-FP8-vision stack through WanGP's load-time text
-   encoder selector; switching stacks requires a model reload.
+   checkpoint.
 4. Accept one or two ordered reference images.
 5. VAE-encode each reference and prepend its clean latent tokens to the noisy target sequence.
 6. Assign RoPE frame indices in training order:
@@ -44,11 +41,6 @@ Provide Krea 2 Identity Edit as a separately installable WanGP model plugin with
     thirds. Constant mode must remain the default. Ramp mode uses validated,
     non-decreasing absolute subject multipliers in the 1x..8x range while the
     selected fidelity profile continues to control scene attention.
-12b. Offer a temporary encoder-stack A/B selector. Keep the unified BF16
-    language-and-vision checkpoint first and selected by default. The legacy
-    option must recreate the former Quanto language model, Comfy scaled-FP8
-    visual tower and manual Qwen2-VL processor without changing reference roles
-    or the scene-first, subject-second contract.
 13. Accept a dedicated depth control image separately from the ordered identity
     references, reuse WanGP's native Depth Anything V2 Large preprocessing and
     queue preview, VAE-encode the processed tensor, and apply the public Krea 2
@@ -75,43 +67,29 @@ Provide Krea 2 Identity Edit as a separately installable WanGP model plugin with
     prompting guidance through WanGP's native prompt-help modal contract.
 19. Provide registered spatial outpainting as either an outpaint-only task for
     one uploaded image or an isolated second generation after Identity Edit.
+    Give that pass a dedicated editable prompt with a conservative continuation
+    default; do not reuse the main generation prompt or its negative prompt.
 20. Reuse WanGP's spatial controls, register source coordinates to the
     destination rectangle, cache isolated source K/V, and restore protected
-    source pixels with an inward seam feather.
+    source pixels with an inward seam feather. Resolve ratio-mode direction
+    values as placement weights on the axis actually expanded by the final
+    canvas. Until interior placement is implemented as two passes, reject
+    manual margins that mix horizontal and vertical expansion.
 21. When depth is active, optionally apply an editable three-stage per-step
     ramp to user-added LoRAs during denoising while leaving the plugin's
     selected identity method and depth adapters active throughout, so geometry
     is established before style/detail adapters peak. Default to multipliers
     0.00, 0.25 and 1.00 across the early, middle and final thirds.
-22. Expose ReID rank-32 as a mutually exclusive Turbo-only identity method.
-23. ReID accepts exactly one RGB identity reference, prepares one
-    aspect-preserving, 16-pixel-aligned view within a 384² area budget for both
-    Qwen3-VL grounding and clean-reference VAE encoding, and assigns it RoPE
-    frame 1. Its default transformer path evolves the clean reference once at
-    timestep zero and caches each block's post-RoPE K/V for injection throughout
-    target denoising. Retain the experimental joint timestep-zero reference
-    stream as an explicit diagnostic A/B option.
-24. ReID uses its published 8-step/effective-CFG-1 contract, keeps output aspect
-    independent from the reference, and may be combined with depth but not
-    Registered Outpaint or the Identity Edit adapter.
-24a. Offer the ReID release's optional YuNet face/head crop as an explicit
-    reference-preparation choice. Run detection on a 320-square view, take the
-    crop from the original image, and fall back to the unchanged reference when
-    no face reaches confidence 0.35. Keep full-reference conditioning available.
-25. Expose a reference-free Depth + Prompt method that loads only the depth
+22. Expose a reference-free Depth + Prompt method that loads only the depth
     adapter, uses text-only Qwen3-VL conditioning, preserves the requested
     output aspect, and requires an active depth control image with nonzero
     strength.
-26. Expose an opt-in Turbo/ReID two-phase experiment without changing the
-    standard single-pass default. Phase 1 uses Depth + Prompt with ReID and all
-    user-added LoRAs disabled. Phase 2 low-denoise refines the decoded phase-1
-    image with ReID, optionally retains depth, and restores user-added LoRAs at
-    their selected strengths.
-27. Expose a mutually exclusive raw Control Image process for Turbo/ReID. It
+23. Expose a mutually exclusive raw Control Image process for Identity Edit. It
     must bypass depth preprocessing, use the uploaded image as WanGP's native
-    low-denoise source, preserve the selected output resolution, and leave the
-    sole ReID reference as the identity authority.
-28. Keep the main WanGP form adaptive: show reference preparation only for
+    low-denoise source, preserve the selected canvas aspect, and leave the
+    ordinary Identity Edit reference stream as the identity and visual-content
+    authority.
+24. Keep the main WanGP form adaptive: show reference preparation only for
     reference-backed methods, show its SAM3 phrase only when SAM3 is selected,
     and keep depth strength conditional on depth control. Provide a Yes/No
     Advanced Settings launcher that opens a plugin-owned modal for the less
@@ -138,15 +116,15 @@ Provide Krea 2 Identity Edit as a separately installable WanGP model plugin with
 ## Input constraints
 
 - Identity Edit output aspect ratio should match the primary source image by
-  default. ReID follows the selected output resolution.
+  default.
 - Keep output at or below 2 MP.
 - Prefer roughly 1–1.5 MP for two-person editing.
 - For two-reference composition, image 1 is the scene and image 2 is the subject.
 - A lone Identity Edit reference keeps the established `KI` main-image/scene
-  role. The encoder-stack A/B must not alter reference roles or geometry.
+  role.
 - Identity Edit reference-fidelity boosts follow that same order: the last
   reference receives the subject multiplier and earlier references receive the
-  scene multiplier. They do not apply to ReID or Depth + Prompt.
+  scene multiplier. They do not apply to Depth + Prompt.
 - In subject-attention ramp mode, the last-reference multiplier changes once per
   distinct denoising timestep; repeated CFG/NAG transformer calls at the same
   timestep must not advance the schedule.
@@ -156,23 +134,18 @@ Provide Krea 2 Identity Edit as a separately installable WanGP model plugin with
   reorder an identity reference.
 - Depth + Prompt accepts no identity references and uses the selected output
   resolution rather than deriving its aspect from an image reference.
-- Two-phase Depth then ReID accepts exactly one identity reference, requires
-  active depth and batch size 1, and is unavailable for Raw or Registered
-  Outpaint. Its phase-1 prompt must describe the intended image because that
-  pass intentionally receives no identity reference.
-- Direct Image to ReID accepts exactly one identity reference and one separate
-  Control Image, uses WanGP's native 0..1 denoising strength, and initially
-  supports whole-frame refinement only. It is unavailable for Raw, Identity
-  Edit, Depth + Prompt, two-phase generation and Registered Outpaint.
+- Direct Image to Identity Edit accepts the normal one or two ordered Identity
+  Edit references plus one separate Control Image, uses WanGP's native 0..1
+  denoising strength, and initially supports whole-frame refinement only. It
+  is unavailable for Depth + Prompt and Registered Outpaint.
 - Depth masks limit conditioning only; they are not output/inpainting masks.
-- Automatic reference isolation applies to Identity Edit reference 2 or ReID's
-  sole identity reference.
-- ReID's sole identity reference retains its own aspect ratio and must not be
-  tagged as WanGP's `K` main-scene reference.
+- Automatic reference isolation applies to Identity Edit reference 2.
 - Prompt documentation must remain generic and must not encode private test
   images or conversation-specific scenarios.
 - Registered Outpaint requires one source per pass. Depth is unavailable in an
-  outpaint pass; Identity + Outpaint uses two separately scheduled passes.
+  outpaint pass; Identity + Outpaint uses two separately scheduled passes. Its
+  dedicated prompt describes only context-consistent canvas continuation and is
+  isolated from the main generation prompt.
 
 ## Non-goals for the first release
 

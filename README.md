@@ -4,9 +4,9 @@ Description:
 Standalone WanGP model-plugin project for instruction-based, identity-preserving image editing with the community [Krea 2 Identity Edit](https://huggingface.co/conradlocke/krea2-identity-edit) LoRA.
 
 > [!IMPORTANT]
-> This public beta exposes the dual-conditioning runtime for testing. It is not
-> a stable release: use it only with a compatible WanGP installation and review
-> the remaining acceptance work in `GPU_ACCEPTANCE.md` before relying on it.
+> This branch is ready for code review, but GPU validation is still pending. It
+> is not a stable release, and its default model entries remain hidden until the
+> acceptance work in `GPU_ACCEPTANCE.md` passes.
 
 ## Intended capabilities
 
@@ -15,8 +15,6 @@ Standalone WanGP model-plugin project for instruction-based, identity-preserving
 - Ordered two-image editing: scene first, subject second.
 - VAE source latents injected as clean in-context transformer tokens.
 - Image-grounded Qwen3-VL instruction conditioning.
-- A temporary load-time encoder regression selector: unified BF16 (default) or
-  the former Quanto-language/scaled-FP8-vision stack.
 - Configurable `grounding_px`, defaulting to 768.
 - Automatic Identity Edit LoRA download at strength 1.0.
 - v1.2 full-rank, rank-128 and rank-64 LoRA choices, with full rank as default.
@@ -39,7 +37,7 @@ Implemented:
 - public WanGP model-plugin handler with collision-free architecture names;
 - full Qwen3-VL visual grounding using WanGP's complete
   `Qwen3-VL-4B-Instruct_bf16.safetensors` language-and-vision checkpoint by
-  default, with the former split Quanto/FP8 stack available for regression A/B;
+  default, with no obsolete split vision-checkpoint dependency;
 - clean VAE source tokens ordered as `[text | scene | subject | target]` with
   reference RoPE frames 1/2 and target frame 0;
 - grounded positive, CFG-negative and NAG conditioning;
@@ -58,9 +56,9 @@ Implemented:
   projection, with configurable feathering;
 - one/two-reference validation, first-reference output aspect matching,
   aspect-preserving secondary-reference FIT geometry and a default 2 MP
-  reference-mode cap, with Advanced Settings overrides for full selected
-  resolution and legacy stretch regression testing; reference-free Depth +
-  Prompt uses the selected resolution directly;
+  reference-mode cap, with an Advanced Settings override for full selected
+  resolution; reference-free Depth + Prompt uses the selected resolution
+  directly;
 - WanGP callbacks, interruption, LoRA scheduling and standard image tensors.
 
 Still pending before a stable release:
@@ -71,28 +69,19 @@ Still pending before a stable release:
 - release-facing profiles, screenshots, a fresh GitHub-URL installation and the
   final `v2.0.0` release tag.
 
-## Experimental preview
+## Review status
 
-The Turbo and Raw entries are intentionally visible so WanGP users can test
-the current implementation before the full GPU acceptance matrix is complete.
-Expect model downloads, VRAM usage and image quality to vary by WanGP version,
-GPU and memory profile. Do not upload model weights, user images or generated
-outputs to this repository. The first image is the scene reference; when using
-two images, the second is the subject reference.
+The Turbo and Raw definitions remain hidden while the GPU acceptance matrix is
+incomplete. The implementation is ready for source review, not release or merge
+acceptance. Do not upload model weights, user images or generated outputs to
+this repository. The first image is the scene reference; when using two images,
+the second is the subject reference.
 
 The upstream-recommended v1.2 full-rank weight is available from the **Identity
 Edit LoRA** dropdown and is the current default. This plugin matches the output
 aspect ratio to the first reference and preserves the second reference's aspect
 ratio through centred FIT latent geometry. The upstream node pack's optional
 `ref_boost` dial is not implemented.
-
-For encoder regression A/B testing, use WanGP's text-encoder selector before
-loading the model. The first/default choice is the unified full-BF16 language
-and vision checkpoint. The second choice recreates the former Quanto language
-model plus scaled-FP8 visual tower and legacy processor. Reload the model after
-changing this selector. Reference roles do not change: one Identity Edit image
-is still the `KI` main image, while two images remain scene first and subject
-second.
 
 ### Depth + prompt only
 
@@ -259,6 +248,11 @@ is the priority.
 
 ### Experimental registered spatial outpaint
 
+> [!IMPORTANT]
+> Registered Outpaint supports one expansion axis per pass: left/right or
+> top/bottom. Selecting both axes in manual margin mode is rejected until the
+> planned two-pass interior-placement implementation is GPU-validated.
+
 In Advanced settings, choose **Outpaint uploaded image only** to expand a single
 uploaded reference without Identity Edit, or **Identity Edit, then outpaint
 result** to use the first generation as the protected source of a second pass.
@@ -268,9 +262,17 @@ feather.
 
 This is a real additional generation rather than a pixel-only postprocess.
 Identity and depth adapters are inactive during the outpaint pass, and depth is
-rejected while Registered Outpaint is selected. Initial support targets
-one-pass edge placement; arbitrary interior two-pass placement remains pending
-GPU acceptance.
+rejected while Registered Outpaint is selected. Set **Registered Outpaint
+prompt** in Advanced settings to describe only the complete, context-consistent
+continuation. The outpaint pass receives that dedicated prompt and a clean
+default negative prompt; it does not reuse the main generation prompt.
+
+In target-aspect-ratio mode, the direction sliders act as placement weights. The
+plugin derives how many pixels the final canvas actually needs, then applies
+only the left/right or top/bottom pair for that expansion axis. Manual
+outpainting supports one axis per pass. A mixed horizontal-and-vertical
+selection is rejected with an actionable error until registered two-pass
+interior placement is implemented and GPU-validated.
 
 Start with:
 
@@ -281,6 +283,11 @@ Start with:
 ## Local development
 
 This repository must be installed as one directory beneath WanGP's `plugins/` directory. During development, use a directory junction or symbolic link rather than maintaining a second copy.
+
+Normal inference logs omit image/tensor hashes and sampled conditioning
+statistics. For a focused diagnostic run, set `KREA2_IDENTITY_DEBUG=1` before
+starting WanGP; this enables those heavier diagnostics without changing the
+saved generation settings.
 
 Windows example, run from the WanGP `app` directory:
 

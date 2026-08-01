@@ -10,16 +10,13 @@ from models.krea2.krea2_handler import (  # pyright: ignore[reportMissingImports
 
 from .krea2_advanced_settings import (
     ADVANCED_SETTINGS_ID,
+    OUTPUT_METADATA_CONTEXT_KEY,
     encode_advanced_settings,
     expand_advanced_settings,
 )
 from .krea2_identity_prompt import (
     DEFAULT_IDENTITY_PROMPT,
     prompt_infos,
-)
-from .krea2_identity_features import (
-    REID_EXPERIMENTS_DISABLED_MESSAGE,
-    reid_experiments_enabled,
 )
 from .krea2_identity_utils import (
     depth_control_selected,
@@ -47,24 +44,26 @@ _BF16_TEXT_ENCODER_URL = (
     "https://huggingface.co/DeepBeepMeep/krea-2/resolve/main/"
     "Qwen3-VL-4B-Instruct/Qwen3-VL-4B-Instruct_bf16.safetensors"
 )
-_LEGACY_TEXT_ENCODER_URL = (
-    "https://huggingface.co/DeepBeepMeep/krea-2/resolve/main/"
-    "Qwen3-VL-4B-Instruct/"
-    "Qwen3-VL-4B-Instruct_quanto_bf16_int8.safetensors"
-)
-_LEGACY_VISION_REPO = "Comfy-Org/Krea-2"
-_LEGACY_VISION_FOLDER = "text_encoders"
-_LEGACY_VISION_FILENAME = "qwen3vl_4b_fp8_scaled.safetensors"
 _SAM3_REPO = "DeepBeepMeep/Wan2.1"
 _SAM3_FOLDER = "sam3"
 _SAM3_FILES = [
     "sam3.1_multiplex_bf16.safetensors",
     "bpe_simple_vocab_16e6.txt.gz",
 ]
-_REID_REPO = "yijunwang2/krea2-reid"
-_REID_FACE_MODEL_FOLDER = "models"
-_REID_FACE_MODEL_FILENAME = "face_detection_yunet_2023mar_int8.onnx"
 MINIMUM_WANGP = "WanGP v12.34 (public API audited at commit 6b92c54f92bde24d6d309d6f61249353b0ec783d)"
+
+
+def _item_count(value) -> int:
+    if value is None:
+        return 0
+    root = getattr(value, "root", None)
+    if root is not None:
+        value = root
+    if isinstance(value, (list, tuple, set)):
+        return len(value)
+    if isinstance(value, str):
+        return int(bool(value.strip()))
+    return 1
 
 
 def _composite_subject_on_white(image, mask):
@@ -116,55 +115,17 @@ def _postprocess_identity_references(
         # does not silently change behavior before that error is surfaced.
         settings = dict(settings)
     removal_mode = settings.get("subject_background_removal", "off")
-    if removal_mode not in {"stable", "sam3", "reid_face_crop"}:
+    if removal_mode not in {"stable", "sam3"}:
         return images, masks
     identity_method = validate_identity_method(settings.get("identity_method"))
-    if identity_method == "reid" and not reid_experiments_enabled():
-        raise ValueError(REID_EXPERIMENTS_DISABLED_MESSAGE)
     if identity_method == "depth_prompt":
         return images, masks
-    subject_index = 0 if identity_method == "reid" else 1
+    subject_index = 1
     if images is None or len(images) <= subject_index:
         return images, masks
 
     output = list(images)
-    if removal_mode == "reid_face_crop":
-        if identity_method != "reid":
-            raise ValueError(
-                "Automatic face/head crop is available only with the ReID identity method"
-            )
-        if callable(send_cmd):
-            send_cmd("progress", [0, "Preparing ReID Face Reference with YuNet"])
-        from shared.utils import files_locator as fl
-
-        model_path = None
-        for candidate in (
-            os.path.join("ckpts", _REID_FACE_MODEL_FOLDER, _REID_FACE_MODEL_FILENAME),
-            os.path.join(_REID_FACE_MODEL_FOLDER, _REID_FACE_MODEL_FILENAME),
-            _REID_FACE_MODEL_FILENAME,
-        ):
-            model_path = fl.locate_file(candidate, error_if_none=False)
-            if model_path is not None:
-                break
-        if model_path is None:
-            raise RuntimeError(
-                "The ReID YuNet face detector was not found. Restart WanGP so the "
-                "plugin asset can download, or select Keep full reference."
-            )
-        from .krea2_reid_face_crop import YuNetFaceCropper
-
-        crop = YuNetFaceCropper(model_path).crop(output[subject_index])
-        output[subject_index] = crop.image
-        print(
-            "[Krea2 Identity][ReID] face reference preparation: "
-            f"applied={crop.metadata['applied']}, "
-            f"confidence={crop.metadata['confidence']}, "
-            f"candidates={crop.metadata['candidate_count']}, "
-            f"original={crop.metadata['original_size']}, "
-            f"crop={crop.metadata['crop_bbox_original']}, "
-            f"output={crop.metadata['output_size']}"
-        )
-    elif removal_mode == "sam3":
+    if removal_mode == "sam3":
         if callable(send_cmd):
             send_cmd("progress", [0, "Segmenting Subject Reference with SAM3"])
         phrase = str(settings.get("subject_segmentation_prompt", "person") or "").strip()
@@ -189,9 +150,8 @@ def _postprocess_identity_references(
         from shared.utils.utils import new_rembg_session
 
         session = new_rembg_session()
-        # Identity Edit isolates reference 2; ReID has one identity reference
-        # and therefore isolates reference 1. Use direct predicted alpha rather
-        # than closed-form alpha matting in both cases.
+        # Identity Edit isolates reference 2. Use direct predicted alpha rather
+        # than closed-form alpha matting.
         output[subject_index] = remove(
             output[subject_index].convert("RGB"),
             session=session,
@@ -218,13 +178,10 @@ class family_handler(_Krea2Handler):
         # WanGP merges this input over the handler defaults after this call.
         model_def["loras"] = []
         model_def["loras_multipliers"] = []
-        reid_enabled = reid_experiments_enabled()
         image_ref_choices = [
             ("Identity Edit — scene, then optional subject", "KI"),
             ("Depth + prompt only — no reference", ""),
         ]
-        if reid_enabled:
-            image_ref_choices.insert(1, ("ReID — one identity subject", "I"))
         identity_method_choices = [
             ("Identity Edit — standard fidelity (1x / 1x)", "identity_edit"),
             ("Identity Edit — subject fidelity 2x", "identity_edit_ref2"),
@@ -233,44 +190,31 @@ class family_handler(_Krea2Handler):
             ("Identity Edit — subject 4x + scene 2x (two refs)", "identity_edit_ref4_scene2"),
             ("Identity Edit — subject 8x + scene 2x (two refs)", "identity_edit_ref8_scene2"),
         ]
-        if reid_enabled:
-            identity_method_choices.append(
-                ("ReID rank 32 — one identity reference (Turbo only)", "reid")
-            )
         identity_method_choices.append(
             ("Depth + prompt only — no identity reference", "depth_prompt")
         )
         guide_preprocessing = {
-            "selection": ["", "DV"],
-            "labels": {"": "No Control Image", "DV": "Transfer Depth"},
+            "selection": ["", "VG", "DV"],
+            "labels": {
+                "": "No Control Image",
+                "VG": "Direct Image → Identity Edit",
+                "DV": "Transfer Depth",
+            },
             "default": "",
             "label": "Control Image Process",
         }
-        if reid_enabled:
-            guide_preprocessing["selection"].insert(1, "VG")
-            guide_preprocessing["labels"]["VG"] = "Direct Image → ReID Edit"
-        subject_preparation_choices = [("Keep background", "off")]
-        if reid_enabled:
-            subject_preparation_choices.append(
-                ("ReID automatic face/head crop (recommended)", "reid_face_crop")
-            )
-        subject_preparation_choices.extend([
+        subject_preparation_choices = [
+            ("Keep background", "off"),
             ("SAM3 semantic isolation (recommended)", "sam3"),
             ("rembg fast isolation (legacy)", "stable"),
-        ])
+        ]
         result = dict(_Krea2Handler.query_model_def(_base_type(base_model_type), model_def))
         result.update(
             {
                 "profiles_dir": [_PROFILE_DIR],
                 "preset_profiles_dir": [],
-                # Temporary regression A/B. Unified BF16 stays first/default;
-                # the second choice recreates the former Quanto-language plus
-                # Comfy scaled-FP8-vision encoder stack.
-                "text_encoder_URLs": [
-                    _BF16_TEXT_ENCODER_URL,
-                    _LEGACY_TEXT_ENCODER_URL,
-                ],
-                "prompt_infos": prompt_infos(include_reid=reid_enabled),
+                "text_encoder_URLs": [_BF16_TEXT_ENCODER_URL],
+                "prompt_infos": prompt_infos(),
                 "image_ref_choices": {
                     "choices": image_ref_choices,
                     "letters_filter": "KI",
@@ -278,7 +222,7 @@ class family_handler(_Krea2Handler):
                     "label": "Identity Edit References",
                 },
                 # Depth + prompt is a real zero-reference mode. Identity Edit
-                # and ReID retain their stricter runtime reference validation.
+                # retains its stricter runtime reference validation.
                 "at_least_one_image_ref_needed": False,
                 "one_image_ref_only": False,
                 "inpaint_support": False,
@@ -347,7 +291,7 @@ class family_handler(_Krea2Handler):
                             "Transfer Depth to be selected."
                         ),
                         # The top Identity Edit References selector owns the
-                        # Identity Edit/ReID/Depth-only family. plugin.py keeps
+                        # Identity Edit/Depth-only family. plugin.py keeps
                         # this dropdown visible only for Identity Edit fidelity.
                         "video_prompt_type": "K",
                     },
@@ -460,21 +404,6 @@ class family_handler(_Krea2Handler):
                 "fileList": [list(_SAM3_FILES)],
             }
         )
-        base_files.append(
-            {
-                "repoId": _LEGACY_VISION_REPO,
-                "sourceFolderList": [_LEGACY_VISION_FOLDER],
-                "fileList": [[_LEGACY_VISION_FILENAME]],
-            }
-        )
-        if base_model_type == TURBO_MODEL_TYPE and reid_experiments_enabled():
-            base_files.append(
-                {
-                    "repoId": _REID_REPO,
-                    "sourceFolderList": [_REID_FACE_MODEL_FOLDER],
-                    "fileList": [[_REID_FACE_MODEL_FILENAME]],
-                }
-            )
         return base_files
 
     @staticmethod
@@ -550,8 +479,6 @@ class family_handler(_Krea2Handler):
                     "depth_control_strength": 1.0,
                     "grounding_px": 768,
                     "identity_lora_variant": "full_v1.2",
-                    "reid_lora_strength": 1.0,
-                    "reid_reference_method": "isolated_cache",
                     "subject_attention_timing": "constant",
                     "subject_attention_ramp_early": 1.0,
                     "subject_attention_ramp_middle": 2.0,
@@ -587,17 +514,16 @@ class family_handler(_Krea2Handler):
             if isinstance(existing_custom_settings, dict)
             else {}
         )
-        identity_method = validate_identity_method(
-            existing_custom_settings.get("identity_method")
-        )
+        try:
+            identity_method = validate_identity_method(
+                existing_custom_settings.get("identity_method")
+            )
+        except ValueError:
+            identity_method = "identity_edit"
+            existing_custom_settings["identity_method"] = "identity_edit"
         video_prompt_type = str(ui_defaults.get("video_prompt_type", "") or "")
         if identity_method == "depth_prompt":
             video_prompt_type = video_prompt_type.replace("K", "").replace("I", "")
-        elif identity_method == "reid":
-            # K tells WanGP that reference 1 is a main scene and resizes it to
-            # the output canvas. ReID's sole reference is identity-only and
-            # must retain its own aspect ratio.
-            video_prompt_type = video_prompt_type.replace("K", "")
         elif "I" in video_prompt_type and "K" not in video_prompt_type:
             video_prompt_type = "K" + video_prompt_type
         if "D" in video_prompt_type and "V" in video_prompt_type:
@@ -654,9 +580,6 @@ class family_handler(_Krea2Handler):
             except ValueError:
                 custom_settings.update(expand_advanced_settings({}))
             for legacy_process_setting in (
-                "two_phase_mode",
-                "phase2_denoising_strength",
-                "phase2_depth_mode",
                 "outpaint_mode",
             ):
                 custom_settings.pop(legacy_process_setting, None)
@@ -707,67 +630,34 @@ class family_handler(_Krea2Handler):
         video_prompt_type = str(inputs.get("video_prompt_type", "") or "")
         if identity_method == "depth_prompt":
             video_prompt_type = video_prompt_type.replace("K", "").replace("I", "")
-        elif identity_method == "reid":
-            video_prompt_type = video_prompt_type.replace("K", "")
         elif "I" in video_prompt_type and "K" not in video_prompt_type:
             video_prompt_type = "K" + video_prompt_type
         inputs["video_prompt_type"] = video_prompt_type
         depth_selected = depth_control_selected(video_prompt_type)
         direct_image_selected = direct_image_control_selected(video_prompt_type)
+        settings.pop("_registered_outpaint_ratio", None)
         validate_depth_user_lora_timing(settings.get("depth_user_lora_timing"))
         validate_depth_user_lora_ramp(
             settings.get("depth_user_lora_ramp_early"),
             settings.get("depth_user_lora_ramp_middle"),
             settings.get("depth_user_lora_ramp_final"),
         )
-        (
-            two_phase_mode,
-            _phase2_denoising_strength,
-            _phase2_depth_mode,
-            outpaint_mode,
-        ) = resolve_generation_process(settings)
-        if not reid_experiments_enabled() and (
-            identity_method == "reid"
-            or direct_image_selected
-            or two_phase_mode == "depth_then_reid"
-        ):
-            return REID_EXPERIMENTS_DISABLED_MESSAGE
-        if identity_method == "reid" and base_model_type != TURBO_MODEL_TYPE:
-            return "Krea 2 ReID is supported only by the Turbo model definition."
-        if identity_method == "reid" and outpaint_mode != "off":
-            return "Krea 2 ReID cannot be combined with Registered Outpaint."
+        _, _, _, outpaint_mode = resolve_generation_process(settings)
         if identity_method == "depth_prompt" and outpaint_mode != "off":
             return "Depth + prompt only cannot be combined with Registered Outpaint."
         if direct_image_selected:
-            if identity_method != "reid":
-                return "Direct Image → ReID Edit requires the ReID identity method."
+            if identity_method != "identity_edit":
+                return "Direct Image → Identity Edit requires an Identity Edit method."
             if "A" in video_prompt_type or "Y" in video_prompt_type:
-                return "Direct Image → ReID Edit currently supports Whole Frame only."
+                return "Direct Image → Identity Edit currently supports Whole Frame only."
+            if outpaint_mode != "off":
+                return "Direct Image → Identity Edit cannot be combined with Registered Outpaint."
             try:
                 validate_direct_image_denoising_strength(
                     inputs.get("denoising_strength")
                 )
             except ValueError as exc:
                 return str(exc)
-        if two_phase_mode == "depth_then_reid":
-            if base_model_type != TURBO_MODEL_TYPE:
-                return "Two-phase Depth then ReID is supported only by Krea 2 Turbo."
-            if identity_method != "reid":
-                return "Two-phase Depth then ReID requires the ReID identity method."
-            if outpaint_mode != "off":
-                return "Two-phase Depth then ReID cannot use Registered Outpaint."
-            if not depth_selected:
-                return "Two-phase Depth then ReID requires Transfer Depth and a Control Image."
-            try:
-                phase_depth_strength = validate_depth_control_strength(
-                    settings.get("depth_control_strength")
-                )
-            except ValueError as exc:
-                return str(exc)
-            if phase_depth_strength <= 0:
-                return "Two-phase Depth then ReID requires depth strength greater than 0."
-            if int(inputs.get("batch_size", 1) or 1) != 1:
-                return "Two-phase Depth then ReID currently requires batch size 1."
         if identity_method == "depth_prompt" and not depth_selected:
             return "Depth + prompt only requires Transfer Depth and a Control Image."
         if identity_method == "depth_prompt":
@@ -792,6 +682,11 @@ class family_handler(_Krea2Handler):
             ratio = str(inputs.get("video_guide_outpainting_ratio", "") or "").strip()
             if not margins and not ratio:
                 return "Registered Outpaint requires Spatial Outpainting margins or a target aspect ratio."
+            # WanGP resolves aspect-ratio slider weights only against its
+            # Control Image input. Registered Outpaint instead uses an image
+            # reference, so retain the selected ratio for the plugin runtime
+            # to resolve against the actual source of each pass.
+            settings["_registered_outpaint_ratio"] = ratio
             if depth_selected:
                 return "Depth control cannot be combined with Registered Outpaint in the same pass."
         if "V" in video_prompt_type:
@@ -802,13 +697,40 @@ class family_handler(_Krea2Handler):
             )
             if all(value is None for value in control_inputs):
                 if direct_image_selected:
-                    return "Direct Image → ReID Edit requires a Control Image."
+                    return "Direct Image → Identity Edit requires a Control Image."
                 if depth_selected:
                     return "Transfer Depth requires a Control Image."
                 return "The selected Control Image process requires a Control Image."
+
+        try:
+            depth_strength = validate_depth_control_strength(
+                settings.get("depth_control_strength")
+            )
+        except ValueError as exc:
+            return str(exc)
+        depth_active = depth_selected and depth_strength > 0
+        depth_mask_active = depth_active and any(
+            flag in video_prompt_type for flag in ("A", "Y")
+        )
+        plugin_data = inputs.get("plugin_data")
+        plugin_data = dict(plugin_data) if isinstance(plugin_data, dict) else {}
+        plugin_data[OUTPUT_METADATA_CONTEXT_KEY] = {
+            "identity_method": identity_method,
+            "depth_active": depth_active,
+            "depth_mask_active": depth_mask_active,
+            "user_lora_count": _item_count(
+                inputs.get("loras_choices", inputs.get("activated_loras"))
+            ),
+        }
+        inputs["plugin_data"] = plugin_data
         return None
 
     @staticmethod
     def validate_generative_prompt(base_model_type, model_def, inputs, prompt):
         """Avoid Krea LanPaint normalization for this non-inpainting plugin."""
         return None
+
+    @staticmethod
+    def custom_prompt_preprocess(prompt, **_kwargs):
+        """Keep WanGP's native red-padding instruction out of plugin prompts."""
+        return prompt
