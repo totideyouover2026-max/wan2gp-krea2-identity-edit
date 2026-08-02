@@ -1,4 +1,4 @@
-# WanGP Krea 2 Identity Edit (2.0.0-beta.1)
+# WanGP Krea 2 Identity Edit (2.0.0-Release)
 
 Description:
 Standalone WanGP model-plugin project for instruction-based, identity-preserving image editing with the community [Krea 2 Identity Edit](https://huggingface.co/conradlocke/krea2-identity-edit) LoRA.

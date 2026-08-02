@@ -120,17 +120,17 @@
   geometry and cover left, right, top and bottom placement with unit tests.
 - [x] Isolate a dedicated conservative outpaint prompt and negative prompt from
   the main generation pass, including disabling the inherited padding prompt.
-- [ ] Run Turbo/Raw Registered Outpaint GPU golden tests and record peak VRAM.
-- [ ] GPU-validate all one-pass edge placements and prompt isolation.
-- [ ] Add interior placement as two registered passes before accepting manual
+- [x] Run Turbo/Raw Registered Outpaint GPU golden tests and record peak VRAM.
+- [x] GPU-validate all one-pass edge placements and prompt isolation.
+- [x] Add interior placement as two registered passes before accepting manual
   margins that mix horizontal and vertical expansion.
 
 - [x] Select a license for original plugin code.
 - [x] Complete third-party notices and preserve adapted-code attribution.
 - [x] Document Krea 2 license, acceptable-use and moderation requirements.
-- [ ] Add screenshots produced from permitted test images.
-- [ ] Validate clean install from a GitHub URL.
-- [ ] Promote `2.0.0-beta.1` to `v2.0.0` only after end-to-end GPU validation.
+- [x] Add screenshots produced from permitted test images.
+- [x] Validate clean install from a GitHub URL.
+- [x] Promote `2.0.0-beta.1` to `v2.0.0` only after end-to-end GPU validation.
 
 ## Definition of done
 

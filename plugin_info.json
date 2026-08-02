@@ -1,6 +1,6 @@
 {
   "name": "Krea 2 Identity Edit",
-  "version": "2.0.0-beta.1",
+  "version": "2.0.0-Release",
   "description": "Identity-preserving Krea 2 Identity Edit with optional experimental depth control for WanGP.",
   "type": "model",
   "model_handlers": [
