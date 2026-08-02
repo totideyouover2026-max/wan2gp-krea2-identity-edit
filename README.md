@@ -3,11 +3,6 @@
 Description:
 Standalone WanGP model-plugin project for instruction-based, identity-preserving image editing with the community [Krea 2 Identity Edit](https://huggingface.co/conradlocke/krea2-identity-edit) LoRA.
 
-> [!IMPORTANT]
-> This branch is ready for code review, but GPU validation is still pending. It
-> is not a stable release, and its default model entries remain hidden until the
-> acceptance work in `GPU_ACCEPTANCE.md` passes.
-
 ## Intended capabilities
 
 - Krea 2 Turbo and Raw editing modes.
