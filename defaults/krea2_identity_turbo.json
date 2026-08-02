@@ -3,7 +3,7 @@
     "name": "Krea 2 Identity Edit — Turbo (experimental)",
     "architecture": "krea2_identity_turbo",
     "description": "EXPERIMENTAL: identity-preserving Krea 2 Turbo editing with optional depth control and reference-free Depth + Prompt generation. Identity Edit keeps scene-first, subject-second ordering and offers optional reference-fidelity attention profiles; standard 1x/1x preserves the original behavior. Depth + Prompt loads only the depth adapter and requires Transfer Depth with no reference image. Standard single pass remains the default.\n\nWhen using the Unlocker LoRA alongside depth control in a standard single pass, start at 0.01; higher values can overpower depth guidance. If unwanted depth structure carries into the result, use Inside Mask to constrain depth to the desired area, or Outside Mask to exclude painted objects.\n\nQwen3-VL grounding resolution controls Identity Edit reference analysis. The scene controls Identity Edit output aspect; Depth + Prompt uses the selected output resolution.",
-    "visible": false,
+    "visible": true,
     "URLs": [
       "https://huggingface.co/DeepBeepMeep/krea-2/resolve/main/Krea2Turbo_bf16.safetensors",
       "https://huggingface.co/DeepBeepMeep/krea-2/resolve/main/Krea2Turbo_quanto_bf16_int8.safetensors"
